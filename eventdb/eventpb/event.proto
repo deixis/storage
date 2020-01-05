@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+option go_package = "github.com/deixis/storage/eventdb/eventpb";
+
+package eventpb;
+
+// RecordedEvent contains all the data about a specific event.
+message RecordedEvent {
+  string ID = 1;
+  uint64 number = 2;
+  string eventType = 3;
+  bytes data = 4;
+  bytes meta = 5;
+}

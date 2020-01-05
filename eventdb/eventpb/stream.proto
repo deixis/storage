@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+option go_package = "github.com/deixis/storage/eventdb/eventpb";
+
+package eventpb;
+
+// StreamMetadata contains all the data about a specific event.
+message StreamMetadata {
+	bytes key = 1;
+	string ID = 2;
+	uint64 version = 3;
+  int64 creationTime = 4;
+  int64 modificationTime = 5;
+  int64 deletionTime = 6;
+
+  map<string, string> extended = 16;
+}

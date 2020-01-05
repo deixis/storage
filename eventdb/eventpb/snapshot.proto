@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+option go_package = "github.com/deixis/storage/eventdb/eventpb";
+
+package eventpb;
+
+message RecordedSnapshot {
+  string ID = 1;
+  uint64 number = 2;
+  bytes data = 3;
+  bytes meta = 4;
+}
