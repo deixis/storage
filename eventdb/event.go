@@ -28,8 +28,12 @@ func (r RecordedEvent) Unmarshal() (Event, error) {
 	if !isEventRegistered(r.Name) {
 		return nil, ErrUnregisteredEvent
 	}
-	vPtr := reflect.New(EventType(r.Name))
-	v := vPtr.Elem().Interface().(Event)
+
+	eventType := EventType(r.Name).Elem()
+	v, ok := reflect.New(eventType).Interface().(Event)
+	if !ok {
+		panic(fmt.Sprintf("%s is not an Event", r.Name))
+	}
 
 	if err := v.UnmarshalBinary(r.Data); err != nil {
 		return nil, err

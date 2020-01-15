@@ -226,6 +226,9 @@ func (e *eventCreated) MarshalBinary() ([]byte, error) {
 }
 
 func (e *eventCreated) UnmarshalBinary(data []byte) error {
+	if e == nil {
+		panic("unmarshal on nil pointer")
+	}
 	return nil
 }
 
@@ -236,5 +239,8 @@ func (e *eventUpdated) MarshalBinary() ([]byte, error) {
 }
 
 func (e *eventUpdated) UnmarshalBinary(data []byte) error {
+	if e == nil {
+		panic("unmarshal on nil pointer")
+	}
 	return nil
 }
