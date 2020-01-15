@@ -1,10 +1,10 @@
 package eventdb
 
 import (
+	"github.com/deixis/errors"
 	"github.com/deixis/pkg/utc"
 	"github.com/deixis/storage/eventdb/eventpb"
 	"github.com/deixis/storage/kvdb"
-	"github.com/deixis/errors"
 )
 
 var (
@@ -24,6 +24,8 @@ type StreamReader interface {
 	Event(event uint64) (*RecordedEvent, error)
 	// Events loads a range of events from the stream.
 	Events(start uint64, options ...RangeOption) EventsRangeResult
+	// Events loads a range of events from the stream.
+	EventsInRange(start, end uint64, options ...RangeOption) EventsRangeResult
 
 	// Snapshots loads a range of snapshots from the stream.
 	Snapshots(start uint64, options ...RangeOption) SnapshotsRangeResult

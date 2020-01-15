@@ -5,12 +5,12 @@ import (
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/apple/foundationdb/bindings/go/src/fdb/tuple"
+	"github.com/deixis/errors"
 	"github.com/deixis/pkg/utc"
 	"github.com/deixis/storage/eventdb/eventpb"
 	"github.com/deixis/storage/kvdb"
 	"github.com/deixis/storage/kvdb/driver/foundationdb"
 	"github.com/gogo/protobuf/proto"
-	"github.com/deixis/errors"
 )
 
 const (
@@ -164,6 +164,33 @@ func (tx *streamReadTransaction) Events(start uint64, options ...RangeOption) Ev
 	return &eventsRangeResult{R: res}
 }
 
+func (tx *streamReadTransaction) EventsInRange(start, end uint64, options ...RangeOption) EventsRangeResult {
+	opts := RangeOptions{}
+	for _, opt := range options {
+		opt(&opts)
+	}
+
+	var keyRange kvdb.KeyRange
+	if !opts.Reverse {
+		keyRange = kvdb.KeyRange{
+			Begin: key(tx.Ss, nsEvent, start),
+			End:   key(tx.Ss, nsEvent, end),
+		}
+	} else {
+		keyRange = kvdb.KeyRange{
+			Begin: key(tx.Ss, nsEvent, end),
+			End:   key(tx.Ss, nsEvent, start),
+		}
+	}
+
+	res := tx.Tx.GetRange(
+		keyRange,
+		kvdb.WithRangeLimit(opts.Limit),
+		foundationdb.WithRangeStreamingMode(fdb.StreamingModeWantAll),
+	)
+	return &eventsRangeResult{R: res}
+}
+
 func (tx *streamReadTransaction) Snapshots(start uint64, options ...RangeOption) SnapshotsRangeResult {
 	opts := RangeOptions{}
 	for _, opt := range options {
@@ -272,7 +299,7 @@ func (tx *streamTransaction) AppendEvents(expectedVersion uint64, events ...*Rec
 	for i, event := range events {
 		e := eventpb.RecordedEvent(*event)
 		e.ID = meta.ID
-		e.Number = meta.Version + uint64(i)
+		e.Number = meta.Version + uint64(i) + 1
 
 		data, err := proto.Marshal(&e)
 		if err != nil {

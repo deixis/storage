@@ -8,7 +8,8 @@ package eventpb;
 message RecordedEvent {
   string ID = 1;
   uint64 number = 2;
-  string eventType = 3;
+  // Type is the FQN name for this recorded event
+  string name = 3;
   bytes data = 4;
   bytes meta = 5;
 }

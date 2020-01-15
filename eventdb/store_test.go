@@ -6,11 +6,11 @@ import (
 	"path"
 	"testing"
 
+	"github.com/deixis/errors"
 	"github.com/deixis/storage/eventdb"
 	"github.com/deixis/storage/kvdb"
 	"github.com/deixis/storage/kvdb/driver/bbolt"
 	"github.com/deixis/storage/kvdb/kvtrace"
-	"github.com/deixis/errors"
 )
 
 func TestDB_Init(t *testing.T) {
@@ -166,17 +166,17 @@ func TestStream_Events(t *testing.T) {
 		}
 
 		event := eventdb.RecordedEvent{
-			EventType: "foo.bar",
-			Data:      []byte("day taaa"),
-			Meta:      []byte(""),
+			Name: "foo.bar",
+			Data: []byte("day taaa"),
+			Meta: []byte(""),
 		}
 		if err = stream.AppendEvents(0, &event); err != nil {
 			t.Fatal("expect to append event, but got error", err)
 		}
 		event = eventdb.RecordedEvent{
-			EventType: "foo.bar",
-			Data:      []byte("day taaa"),
-			Meta:      []byte(""),
+			Name: "foo.bar",
+			Data: []byte("day taaa"),
+			Meta: []byte(""),
 		}
 		if err = stream.AppendEvents(1, &event); err != nil {
 			t.Fatal("expect to append event, but got error", err)
@@ -244,17 +244,17 @@ func TestStream_Snapshot(t *testing.T) {
 		}
 
 		event := eventdb.RecordedEvent{
-			EventType: "foo.bar",
-			Data:      []byte("day taaa"),
-			Meta:      []byte(""),
+			Name: "foo.bar",
+			Data: []byte("day taaa"),
+			Meta: []byte(""),
 		}
 		if err = stream.AppendEvents(0, &event); err != nil {
 			t.Fatal("expect to append event, but got error", err)
 		}
 		event = eventdb.RecordedEvent{
-			EventType: "foo.bar",
-			Data:      []byte("day taaa"),
-			Meta:      []byte(""),
+			Name: "foo.bar",
+			Data: []byte("day taaa"),
+			Meta: []byte(""),
 		}
 		if err = stream.AppendEvents(1, &event); err != nil {
 			t.Fatal("expect to append event, but got error", err)
@@ -330,17 +330,17 @@ func TestStream_Isolation(t *testing.T) {
 		}
 
 		event := eventdb.RecordedEvent{
-			EventType: "foo.bar",
-			Data:      []byte("day taaa"),
-			Meta:      []byte(""),
+			Name: "foo.bar",
+			Data: []byte("day taaa"),
+			Meta: []byte(""),
 		}
 		if err = other.AppendEvents(0, &event); err != nil {
 			t.Fatal("expect to append event, but got error", err)
 		}
 		event = eventdb.RecordedEvent{
-			EventType: "foo.bar",
-			Data:      []byte("day taaa"),
-			Meta:      []byte(""),
+			Name: "foo.bar",
+			Data: []byte("day taaa"),
+			Meta: []byte(""),
 		}
 		if err = other.AppendEvents(1, &event); err != nil {
 			t.Fatal("expect to append event, but got error", err)
