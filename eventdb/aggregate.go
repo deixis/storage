@@ -24,15 +24,8 @@ type Aggregate interface {
 	// Reduce applies the event to the aggregate, which will update its internal
 	// state.
 	//
-	// Note: Reduce must verify that an event is applicable in its current state.
-	// The event store will replay all persisted events and then the new ones
-	// before persisting them in order to ensure they do not put the aggregate
-	// in an inconsistent state.
-	// Once validated, the events are added to the stream and persisted to the
-	// database. Should any other events have occured on the stream,
-	// the event store will pull them and start the process again or return a
-	// 409 (conflict) depending on the strategy.
-	// Changes on a stream are guaranteed to be consistent.
+	// Note: Reduce must return errors only when something is wrong with an
+	// unmarshalled event, but should not be used to validate an event.
 	Reduce(e Event, version uint64) error
 }
 
