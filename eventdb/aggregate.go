@@ -38,6 +38,7 @@ type AggregateReader interface {
 // AggregateWriter simplifies interaction with a Stream used for storing Aggregate
 type AggregateWriter interface {
 	Append(expectedVersion uint64, e Event) error
+	SetSnapshot(version uint64, a Aggregate) error
 }
 
 // Aggregater simplifies interaction with a Stream used for storing Aggregate
