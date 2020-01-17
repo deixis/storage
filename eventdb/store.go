@@ -298,7 +298,6 @@ func (tx *streamTransaction) AppendEvents(expectedVersion uint64, events ...*Rec
 	// Append events to stream
 	for i, event := range events {
 		e := eventpb.RecordedEvent(*event)
-		e.ID = meta.ID
 		e.Number = meta.Version + uint64(i) + 1
 
 		data, err := proto.Marshal(&e)
