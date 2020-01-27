@@ -134,3 +134,13 @@ type SnapshotsRangeIterator interface {
 	Advance() bool
 	Get() (*RecordedSnapshot, error)
 }
+
+type StreamReadersRangeResult interface {
+	GetSliceWithError() ([]StreamReader, error)
+	Iterator() StreamReadersRangeIterator
+}
+
+type StreamReadersRangeIterator interface {
+	Advance() bool
+	Get() (StreamReader, error)
+}

@@ -14,9 +14,17 @@ import (
 )
 
 const (
-	nsEvent    = 0x00
-	nsSnapshot = 0x01
-	nsMeta     = 0x02
+	// Global namespaces
+	nsStream = 0x01
+	nsIndex  = 0x02
+
+	// Stream namespaces
+	nsStreamEvent    = 0x00
+	nsStreamSnapshot = 0x01
+	nsStreamMeta     = 0x02
+
+	// Index namespaces
+	nsIndexStreamID = 0x01
 )
 
 var (
@@ -51,6 +59,8 @@ type Store interface {
 type ReadTransaction interface {
 	// Stream loads a read-only stream from the store
 	ReadStream(id string) StreamReader
+	// ReadStreams returns a range of streamss
+	ReadStreams(opts ...kvdb.RangeOption) StreamReadersRangeResult
 }
 
 // WriteTransaction is a read-write transaction
@@ -73,8 +83,24 @@ type readTransaction struct {
 func (tx *readTransaction) ReadStream(id string) StreamReader {
 	return &streamReadTransaction{
 		Tx: tx.T,
-		Ss: tx.Ss.Sub(id),
+		Ss: tx.Ss,
+		ID: id,
 	}
+}
+
+func (tx *readTransaction) ReadStreams(opts ...kvdb.RangeOption) StreamReadersRangeResult {
+	keyRange := kvdb.KeyRange{
+		Begin: key(tx.Ss, nsIndex, nsIndexStreamID, firstKey),
+		End:   key(tx.Ss, nsIndex, nsIndexStreamID, lastKey),
+	}
+	res := tx.T.GetRange(
+		keyRange,
+		append(
+			[]kvdb.RangeOption{foundationdb.WithRangeStreamingMode(fdb.StreamingModeIterator)},
+			opts...,
+		)...,
+	)
+	return &streamReadersRangeResult{R: res, Tx: tx.T, Ss: tx.Ss}
 }
 
 type transaction struct {
@@ -85,12 +111,19 @@ type transaction struct {
 }
 
 func (tx *transaction) Stream(id string) Stream {
-	return buildStreamTransaction(tx.T, tx.Ss.Sub(id))
+	return buildStreamTransaction(tx.T, tx.Ss, id)
 }
 
 func (tx *transaction) CreateStream(id string) (Stream, error) {
-	streamKey := key(tx.Ss, id)
-	streamMetaKey := key(tx.Ss, id, nsMeta)
+	if id == "" {
+		return nil, errors.Bad(&errors.FieldViolation{
+			Field:       "id",
+			Description: "Stream ID cannot be empty",
+		})
+	}
+
+	streamKey := key(tx.Ss, nsStream, id)
+	streamMetaKey := key(tx.Ss, nsStream, id, nsStreamMeta)
 
 	rec, err := tx.T.Get(streamMetaKey).Get()
 	if err != nil {
@@ -116,16 +149,22 @@ func (tx *transaction) CreateStream(id string) (Stream, error) {
 	}
 	tx.T.Set(streamMetaKey, md)
 
-	return buildStreamTransaction(tx.T, tx.Ss.Sub(id)), nil
+	// Add stream index
+	indexStreamKey := key(tx.Ss, nsIndex, nsIndexStreamID, id)
+	tx.T.Set(indexStreamKey, nil)
+
+	return buildStreamTransaction(tx.T, tx.Ss, id), nil
 }
 
 type streamReadTransaction struct {
+	ID string
+
 	Tx kvdb.ReadTransaction
 	Ss kvdb.Subspace
 }
 
 func (tx *streamReadTransaction) Event(event uint64) (*RecordedEvent, error) {
-	data, err := tx.Tx.Get(key(tx.Ss, nsEvent, event)).Get()
+	data, err := tx.Tx.Get(key(tx.Ss, nsStream, tx.ID, nsStreamEvent, event)).Get()
 	if err != nil {
 		return nil, errors.Wrap(err, "error loading recorded event")
 	}
@@ -146,13 +185,13 @@ func (tx *streamReadTransaction) Events(start uint64, options ...RangeOption) Ev
 	var keyRange kvdb.KeyRange
 	if !opts.Reverse {
 		keyRange = kvdb.KeyRange{
-			Begin: key(tx.Ss, nsEvent, start),
-			End:   key(tx.Ss, nsEvent, lastKey),
+			Begin: key(tx.Ss, nsStream, tx.ID, nsStreamEvent, start),
+			End:   key(tx.Ss, nsStream, tx.ID, nsStreamEvent, lastKey),
 		}
 	} else {
 		keyRange = kvdb.KeyRange{
-			Begin: key(tx.Ss, nsEvent, firstKey),
-			End:   key(tx.Ss, nsEvent, start),
+			Begin: key(tx.Ss, nsStream, tx.ID, nsStreamEvent, firstKey),
+			End:   key(tx.Ss, nsStream, tx.ID, nsStreamEvent, start),
 		}
 	}
 
@@ -173,13 +212,13 @@ func (tx *streamReadTransaction) EventsInRange(start, end uint64, options ...Ran
 	var keyRange kvdb.KeyRange
 	if !opts.Reverse {
 		keyRange = kvdb.KeyRange{
-			Begin: key(tx.Ss, nsEvent, start),
-			End:   key(tx.Ss, nsEvent, end),
+			Begin: key(tx.Ss, nsStream, tx.ID, nsStreamEvent, start),
+			End:   key(tx.Ss, nsStream, tx.ID, nsStreamEvent, end),
 		}
 	} else {
 		keyRange = kvdb.KeyRange{
-			Begin: key(tx.Ss, nsEvent, end),
-			End:   key(tx.Ss, nsEvent, start),
+			Begin: key(tx.Ss, nsStream, tx.ID, nsStreamEvent, end),
+			End:   key(tx.Ss, nsStream, tx.ID, nsStreamEvent, start),
 		}
 	}
 
@@ -200,13 +239,13 @@ func (tx *streamReadTransaction) Snapshots(start uint64, options ...RangeOption)
 	var keyRange kvdb.KeyRange
 	if !opts.Reverse {
 		keyRange = kvdb.KeyRange{
-			Begin: key(tx.Ss, nsSnapshot, start),
-			End:   key(tx.Ss, nsSnapshot, lastKey),
+			Begin: key(tx.Ss, nsStream, tx.ID, nsStreamSnapshot, start),
+			End:   key(tx.Ss, nsStream, tx.ID, nsStreamSnapshot, lastKey),
 		}
 	} else {
 		keyRange = kvdb.KeyRange{
-			Begin: key(tx.Ss, nsSnapshot, firstKey),
-			End:   key(tx.Ss, nsSnapshot, start),
+			Begin: key(tx.Ss, nsStream, tx.ID, nsStreamSnapshot, firstKey),
+			End:   key(tx.Ss, nsStream, tx.ID, nsStreamSnapshot, start),
 		}
 	}
 
@@ -220,8 +259,8 @@ func (tx *streamReadTransaction) Snapshots(start uint64, options ...RangeOption)
 
 func (tx *streamReadTransaction) ClosestSnapshot(version uint64) (*RecordedSnapshot, error) {
 	keyRange := kvdb.KeyRange{
-		Begin: key(tx.Ss, nsSnapshot, firstKey),
-		End:   key(tx.Ss, nsSnapshot, lastKey),
+		Begin: key(tx.Ss, nsStream, tx.ID, nsStreamSnapshot, firstKey),
+		End:   key(tx.Ss, nsStream, tx.ID, nsStreamSnapshot, lastKey),
 	}
 	res := tx.Tx.GetRange(
 		keyRange,
@@ -251,7 +290,11 @@ func (tx *streamReadTransaction) Metadata() (StreamMetadata, error) {
 }
 
 func (tx *streamReadTransaction) loadMetadata() (*eventpb.StreamMetadata, error) {
-	data, err := tx.Tx.Get(key(tx.Ss, nsMeta)).Get()
+	if tx.ID == "" {
+		return nil, errors.New("stream ID is empty")
+	}
+
+	data, err := tx.Tx.Get(key(tx.Ss, nsStream, tx.ID, nsStreamMeta)).Get()
 	if err != nil {
 		return nil, errors.Wrap(err, "error loading stream metadata")
 	}
@@ -268,17 +311,21 @@ func (tx *streamReadTransaction) loadMetadata() (*eventpb.StreamMetadata, error)
 type streamTransaction struct {
 	streamReadTransaction
 
+	ID string
+
 	Tx kvdb.Transaction
 	Ss kvdb.Subspace
 }
 
-func buildStreamTransaction(tx kvdb.Transaction, ss kvdb.Subspace) *streamTransaction {
+func buildStreamTransaction(tx kvdb.Transaction, ss kvdb.Subspace, id string) *streamTransaction {
 	t := &streamTransaction{
+		ID: id,
 		Tx: tx,
 		Ss: ss,
 	}
 	t.streamReadTransaction.Tx = tx
 	t.streamReadTransaction.Ss = ss
+	t.streamReadTransaction.ID = id
 	return t
 }
 
@@ -304,7 +351,7 @@ func (tx *streamTransaction) AppendEvents(expectedVersion uint64, events ...*Rec
 		if err != nil {
 			return errors.Wrap(err, "error marshalling event")
 		}
-		tx.Tx.Set(key(tx.Ss, nsEvent, expectedVersion+uint64(i)+1), data)
+		tx.Tx.Set(key(tx.Ss, nsStream, tx.ID, nsStreamEvent, expectedVersion+uint64(i)+1), data)
 	}
 
 	meta.Version += uint64(len(events))
@@ -333,12 +380,12 @@ func (tx *streamTransaction) SetSnapshot(version uint64, snap *RecordedSnapshot)
 	if err != nil {
 		return errors.Wrap(err, "error marshalling snapshot")
 	}
-	tx.Tx.Set(key(tx.Ss, nsSnapshot, version), data)
+	tx.Tx.Set(key(tx.Ss, nsStream, tx.ID, nsStreamSnapshot, version), data)
 	return nil
 }
 
 func (tx *streamTransaction) ClearSnapshot(version uint64) {
-	tx.Tx.Clear(key(tx.Ss, nsSnapshot, version))
+	tx.Tx.Clear(key(tx.Ss, nsStream, tx.ID, nsStreamSnapshot, version))
 }
 
 func (tx *streamTransaction) Delete() error {
@@ -357,14 +404,23 @@ func (tx *streamTransaction) Delete() error {
 	meta.ModificationTime = now
 	meta.DeletionTime = now
 	tx.setMetadata(meta)
+
+	tx.deleteIndices()
 	return nil
 }
 
 func (tx *streamTransaction) PermanentlyDelete() {
+	// Cleanup stream namespace
 	tx.Tx.ClearRange(kvdb.KeyRange{
-		Begin: key(tx.Ss, firstKey),
-		End:   key(tx.Ss, lastKey),
+		Begin: key(tx.Ss, nsStream, tx.ID, firstKey),
+		End:   key(tx.Ss, nsStream, tx.ID, lastKey),
 	})
+
+	tx.deleteIndices()
+}
+
+func (tx *streamTransaction) deleteIndices() {
+	tx.Tx.Clear(key(tx.Ss, nsIndex, nsIndexStreamID, tx.ID))
 }
 
 func (tx *streamTransaction) setMetadata(meta *eventpb.StreamMetadata) {
@@ -372,7 +428,7 @@ func (tx *streamTransaction) setMetadata(meta *eventpb.StreamMetadata) {
 	if err != nil {
 		panic(errors.Wrap(err, "error marshalling stream metadata"))
 	}
-	tx.Tx.Set(key(tx.Ss, nsMeta), data)
+	tx.Tx.Set(key(tx.Ss, nsStream, tx.ID, nsStreamMeta), data)
 }
 
 func key(ss kvdb.Subspace, e ...kvdb.TupleElement) kvdb.Key {
@@ -469,4 +525,65 @@ func (i *snapshotsRangeIterator) Get() (*RecordedSnapshot, error) {
 	}
 	evt := RecordedSnapshot(v)
 	return &evt, nil
+}
+
+type streamReadersRangeResult struct {
+	R  kvdb.RangeResult
+	Ss kvdb.Subspace
+	Tx kvdb.ReadTransaction
+}
+
+func (r *streamReadersRangeResult) GetSliceWithError() (streamReaders []StreamReader, err error) {
+	i := r.Iterator()
+	for i.Advance() {
+		liq, err := i.Get()
+		if err != nil {
+			return nil, err
+		}
+		streamReaders = append(streamReaders, liq)
+	}
+	return streamReaders, nil
+}
+
+func (r *streamReadersRangeResult) Count() (count int) {
+	i := r.Iterator()
+	for i.Advance() {
+		count++
+	}
+	return count
+}
+
+func (r *streamReadersRangeResult) Iterator() StreamReadersRangeIterator {
+	return &streamReadersRangeIterator{I: r.R.Iterator(), Tx: r.Tx, Ss: r.Ss}
+}
+
+type streamReadersRangeIterator struct {
+	I  kvdb.RangeIterator
+	Ss kvdb.Subspace
+	Tx kvdb.ReadTransaction
+}
+
+func (i *streamReadersRangeIterator) Advance() bool {
+	return i.I.Advance()
+}
+
+func (i *streamReadersRangeIterator) Get() (StreamReader, error) {
+	kv, err := i.I.Get()
+	if err != nil {
+		return nil, err
+	}
+	tuple, err := i.Ss.Unpack(kv.Key)
+	if err != nil {
+		return nil, errors.Wrapf(err, "error unpacking key %s", kv.Key)
+	}
+	if len(tuple) < 2 {
+		return nil, errors.Wrapf(err, "error invalid tuple key %s", kv.Key)
+	}
+
+	id := tuple[len(tuple)-1].(string)
+	return &streamReadTransaction{
+		Tx: i.Tx,
+		Ss: i.Ss,
+		ID: id,
+	}, nil
 }
