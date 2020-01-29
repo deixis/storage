@@ -10,7 +10,10 @@ import (
 var (
 	// ErrStreamNotFound when a requested stream does not exist or has been removed.
 	ErrStreamNotFound = errors.WithNotFound(errors.New("stream not found"))
+	// ErrSubscriptionNotFound when a requested subscription does not exist or has been removed.
+	ErrSubscriptionNotFound = errors.WithNotFound(errors.New("subscription not found"))
 
+	// ErrNoSnapshot occurs when attempting to load a snapshot that does not exist
 	ErrNoSnapshot = errors.WithNotFound(errors.New("no snapshot found"))
 )
 
@@ -33,6 +36,11 @@ type StreamReader interface {
 	// the given stream version.
 	ClosestSnapshot(version uint64) (*RecordedSnapshot, error)
 
+	// Subsriptions returns all persistent subscriptions from this stream.
+	Subscriptions() SubscriptionsRangeResult
+	// Subsription returns a persistent subscription
+	Subscription(group string) (Subscription, error)
+
 	// Metadata returns a stream metadata
 	Metadata() (StreamMetadata, error)
 }
@@ -47,6 +55,17 @@ type StreamWriter interface {
 	SetSnapshot(version uint64, snap *RecordedSnapshot) error
 	// ClearSnapshot permanently removes the snapshot from the stream.
 	ClearSnapshot(version uint64)
+
+	// CreateSubscription creates a persistent subscription.
+	//
+	// Before interacting with a subscription group, you need to create one.
+	// You will receive an error if you attempt to create a subscription group
+	// more than once.
+	//
+	// TODO: Add subscription option (e.g retry, ...)
+	CreateSubscription(group string) (Subscription, error)
+	// DeleteSubscription deletes a persistent subscription
+	DeleteSubscription(group string) error
 
 	// Delete soft deletes a stream. This means you can restore it later.
 	// If you try to Load events from a soft deleted stream you receive a not
@@ -143,4 +162,14 @@ type StreamReadersRangeResult interface {
 type StreamReadersRangeIterator interface {
 	Advance() bool
 	Get() (StreamReader, error)
+}
+
+type SubscriptionsRangeResult interface {
+	GetSliceWithError() ([]Subscription, error)
+	Iterator() SubscriptionsRangeIterator
+}
+
+type SubscriptionsRangeIterator interface {
+	Advance() bool
+	Get() (Subscription, error)
 }

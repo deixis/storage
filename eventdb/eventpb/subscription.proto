@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+option go_package = "github.com/deixis/storage/eventdb/eventpb";
+
+package eventpb;
+
+// SubscriptionMetadata contains all the data about a specific subscription.
+message SubscriptionMetadata {
+  bytes key = 1;
+  string group = 2;
+  string StreamID = 3;
+  SubscriptionType type = 4;
+  uint64 position = 5;
+
+  int64 creationTime = 13;
+  int64 modificationTime = 14;
+  int64 deletionTime = 15;
+
+  map<string, string> extended = 16;
+}
+
+enum SubscriptionType {
+  Volatile = 0;
+  CatchUp = 1;
+  Persistent = 2;
+}

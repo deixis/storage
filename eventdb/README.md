@@ -26,3 +26,39 @@ It is not possible to jump into the time machine and say that an event never
 occurred (eg: delete a previous event).
 As such, it is necessary to model a delete explicitly as a new transaction.
 e.g. InvoiceCreated, InvoiceUpdated, and InvoiceDeleted
+
+
+## Example
+
+```go
+func main() {
+	ctx := context.TODO()
+
+	// Create KV store
+	os.Mkdir("tmpdb", 0770)
+	kvs, err := bbolt.Open(path.Join("./tmpdb", t.Name()), 0600, "default")
+	if err != nil {
+		panic(errors.Wrap(err, "error opening DB"))
+	}
+
+	// Create or open "bucket"
+	dir, err := kvs.CreateOrOpenDir([]string{"foo"})
+	if err != nil {
+		panic(err)
+	}
+
+	// Initialise event store layer
+	eventStore, err := eventdb.New(kvs, dir)
+	if err != nil {
+		panic(err)
+	}
+
+	// Just Create a stream with ID 123
+	_, err := eventStore.Transact(ctx, func(tx eventdb.Transaction) (v interface{}, err error) {
+		return tx.CreateStream("123")
+	})
+	if err != nil {
+		panic(err)
+	}
+}
+````
