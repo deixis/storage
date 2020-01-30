@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/deixis/errors"
 	"github.com/deixis/storage/kvdb"
 	"github.com/deixis/storage/kvdb/driver/bbolt"
 	"github.com/deixis/storage/kvdb/kvtrace"
-	"github.com/deixis/errors"
 )
 
 func main() {

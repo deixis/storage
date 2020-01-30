@@ -2,7 +2,6 @@ package eventdb_test
 
 import (
 	"context"
-	"os"
 	"path"
 	"testing"
 
@@ -17,8 +16,6 @@ func TestDB_Init(t *testing.T) {
 	t.Parallel()
 
 	// Create database client
-	os.Mkdir("db", 0770)
-	defer os.RemoveAll("db")
 	bbs, err := bbolt.Open(path.Join("./db", t.Name()), 0600, "default")
 	if err != nil {
 		panic(errors.Wrap(err, "error opening DB"))
@@ -68,8 +65,6 @@ func TestStream_Create(t *testing.T) {
 	t.Parallel()
 
 	// Create database client
-	os.Mkdir("db", 0770)
-	defer os.RemoveAll("db")
 	bbs, err := bbolt.Open(path.Join("./db", t.Name()), 0600, "default")
 	if err != nil {
 		panic(errors.Wrap(err, "error opening DB"))
@@ -135,8 +130,6 @@ func TestStream_Events(t *testing.T) {
 	t.Parallel()
 
 	// Create database client
-	os.Mkdir("db", 0770)
-	defer os.RemoveAll("db")
 	bbs, err := bbolt.Open(path.Join("./db", t.Name()), 0600, "default")
 	if err != nil {
 		panic(errors.Wrap(err, "error opening DB"))
@@ -207,8 +200,6 @@ func TestStream_Snapshot(t *testing.T) {
 	t.Parallel()
 
 	// Create database client
-	os.Mkdir("db", 0770)
-	defer os.RemoveAll("db")
 	bbs, err := bbolt.Open(path.Join("./db", t.Name()), 0600, "default")
 	if err != nil {
 		panic(errors.Wrap(err, "error opening DB"))
@@ -286,8 +277,6 @@ func TestStream_Isolation(t *testing.T) {
 	t.Parallel()
 
 	// Create database client
-	os.Mkdir("db", 0770)
-	defer os.RemoveAll("db")
 	bbs, err := bbolt.Open(path.Join("./db", t.Name()), 0600, "default")
 	if err != nil {
 		panic(errors.Wrap(err, "error opening DB"))
@@ -359,8 +348,6 @@ func TestStream_SoftDeletion(t *testing.T) {
 	t.Parallel()
 
 	// Create database client
-	os.Mkdir("db", 0770)
-	defer os.RemoveAll("db")
 	bbs, err := bbolt.Open(path.Join("./db", t.Name()), 0600, "default")
 	if err != nil {
 		panic(errors.Wrap(err, "error opening DB"))

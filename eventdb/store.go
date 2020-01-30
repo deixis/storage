@@ -3,14 +3,13 @@ package eventdb
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/apple/foundationdb/bindings/go/src/fdb/tuple"
 	"github.com/deixis/errors"
 	"github.com/deixis/pkg/utc"
-	"github.com/deixis/spine/config"
 	"github.com/deixis/spine/net/pubsub"
-	"github.com/deixis/spine/net/pubsub/adapter/inmem"
 	"github.com/deixis/storage/eventdb/eventpb"
 	"github.com/deixis/storage/kvdb"
 	"github.com/deixis/storage/kvdb/driver/foundationdb"
@@ -45,7 +44,7 @@ type Store interface {
 		streamID string,
 		group string,
 		subType SubscriptionType,
-		f SubscriptionCallback,
+		h EventHandler,
 	) (Subscription, error)
 
 	// Transact initiates a transaction
@@ -92,40 +91,46 @@ type Transaction interface {
 	Transaction() kvdb.Transaction
 }
 
-type SubscriptionCallback func(ctx context.Context, e Event) error
+type EventHandler func(ctx context.Context, e Event) error
 
 type store struct {
+	mu sync.Mutex
+
 	kv kvdb.Store
 	ss kvdb.Subspace
 
-	pubSub        pubsub.PubSub
-	subscriptions map[string]Subscription
+	pubSub      pubsub.PubSub
+	drainPubSub bool
+	watchers    map[string][]*subscriptionWatcher
 }
 
 // New creates a new EventDB store
 func New(
 	s kvdb.Store,
 	ss kvdb.Subspace,
+	storeOpts ...StoreOption,
 ) (Store, error) {
-	// TODO: Allow to inject an existing pub/sub
-	// We would then have to prefix keys to avoid clashes
-	ps, err := inmem.New(config.NopTree())
-	if err != nil {
-		return nil, errors.Wrap(err, "error initialising store")
+	opts := defaultStoreOptions()
+	for _, opt := range storeOpts {
+		opt.apply(opts)
 	}
 
-	return &store{
-		kv:     s,
-		ss:     ss,
-		pubSub: ps,
-	}, nil
+	eventStore := &store{
+		kv:          s,
+		ss:          ss,
+		pubSub:      opts.pubSub,
+		drainPubSub: opts.drainPubSub,
+		watchers:    map[string][]*subscriptionWatcher{},
+	}
+
+	return eventStore, nil
 }
 
 func (s *store) Subscribe(
 	ctx context.Context,
 	streamID, group string,
 	subType SubscriptionType,
-	fn SubscriptionCallback,
+	h EventHandler,
 ) (sub Subscription, err error) {
 	// Check whether we have a persisted subscription
 	var streamMeta *StreamMetadata
@@ -166,37 +171,25 @@ func (s *store) Subscribe(
 		return nil, err
 	}
 
-	// TODO: Register subscription
-	// TODO: Return subscription and execute the following code in background
-	// TODO: Catch up (persistent or catch up), then listen to live events
-	// TODO: Update position
-
-	// Listen to live events
-	err = s.pubSub.Subscribe(group, streamID, func(ctx context.Context, data []byte) {
-		v := &eventpb.RecordedEvent{}
-		if err := proto.Unmarshal(data, v); err != nil {
-			// FIXME: Log it
-			return
-		}
-		evt, err := RecordedEvent(*v).Unmarshal()
-		if err != nil {
-			// FIXME: Log it
-			return
-		}
-
-		// Propagate
-		if err := fn(ctx, evt); err != nil {
-			// FIXME: Log it
-			return
-		}
-
-		// TODO: Update subscription position
-	})
+	subMeta, err := sub.Meta()
 	if err != nil {
-		return nil, errors.Wrap(err, "error subscribing to stream")
+		return nil, err
 	}
 
-	return sub, nil
+	w := newSubscriptionWatcher()
+	w.StreamMeta = streamMeta
+	w.SubMeta = &subMeta
+	w.Sub = s.pubSub
+	w.Store = s
+	w.EventHandler = h
+
+	go w.Start(ctx)
+
+	s.mu.Lock()
+	s.watchers[streamID] = append(s.watchers[streamID], w)
+	s.mu.Unlock()
+
+	return w, nil
 }
 
 func (s *store) Transact(
@@ -244,10 +237,22 @@ func (s *store) KV() kvdb.Store {
 }
 
 func (s *store) Close() error {
-	// TODO: Wait for all in-flight subscription events to end
-	// TODO: Close all subscriptions
-	// TODO: Cleanup transient subscriptions
-	s.pubSub.Drain()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Close all subscription watchers
+	for _, watchers := range s.watchers {
+		for _, watcher := range watchers {
+			watcher.Close()
+		}
+	}
+
+	// Only drain internal pub sub instances
+	if s.drainPubSub {
+		s.pubSub.Drain()
+	}
+
+	// Finally close KV store
 	return s.kv.Close()
 }
 
@@ -604,6 +609,9 @@ func (tx *streamTransaction) AppendEvents(expectedVersion uint64, events ...*Rec
 			return errors.Wrap(err, "error marshalling event")
 		}
 		tx.Tx.Set(key(tx.Ss, nsStream, tx.ID, nsStreamEvent, expectedVersion+uint64(i)+1), data)
+
+		// Publish event
+		tx.Pub.Publish(tx.ID, data)
 	}
 
 	meta.Version += uint64(len(events))
@@ -666,7 +674,7 @@ func (tx *streamTransaction) CreateSubscription(group string) (Subscription, err
 		Group:            group,
 		StreamID:         tx.ID,
 		Type:             eventpb.SubscriptionType_Persistent,
-		Position:         0, // Start from the beginning
+		Position:         0, // Start from the beginning by default
 		CreationTime:     now,
 		ModificationTime: now,
 		DeletionTime:     0,
@@ -745,10 +753,15 @@ func (tx *streamTransaction) Delete() error {
 	tx.setMetadata(meta)
 
 	tx.deleteIndices()
+	tx.closeStreamWatchers()
 	return nil
 }
 
 func (tx *streamTransaction) PermanentlyDelete() {
+	// Close watchers first to make sure they don't write on the stream namespace
+	// after clear range
+	tx.closeStreamWatchers()
+
 	// Cleanup stream namespace
 	tx.Tx.ClearRange(kvdb.KeyRange{
 		Begin: key(tx.Ss, nsStream, tx.ID, firstKey),
@@ -756,6 +769,10 @@ func (tx *streamTransaction) PermanentlyDelete() {
 	})
 
 	tx.deleteIndices()
+}
+
+func (tx *streamTransaction) closeStreamWatchers() {
+	// TODO: Close all stream watchers
 }
 
 func (tx *streamTransaction) deleteIndices() {

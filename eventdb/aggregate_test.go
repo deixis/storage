@@ -2,15 +2,9 @@ package eventdb_test
 
 import (
 	"context"
-	"os"
-	"path"
 	"testing"
 
-	"github.com/deixis/errors"
 	"github.com/deixis/storage/eventdb"
-	"github.com/deixis/storage/kvdb"
-	"github.com/deixis/storage/kvdb/driver/bbolt"
-	"github.com/deixis/storage/kvdb/kvtrace"
 )
 
 func init() {
@@ -151,46 +145,6 @@ func TestAggregate_LoadVersion(t *testing.T) {
 	if aggr.version != loadVersion {
 		t.Errorf("expect to get an aggregate with version %d, but got version %d", loadVersion, aggr.version)
 	}
-}
-
-func withEventDB(t *testing.T, fn func(eventdb.Store)) {
-	withKV(t, func(kvs kvdb.Store, dir kvdb.DirectorySubspace) {
-		s, err := eventdb.New(kvs, dir)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		fn(s)
-
-		if err := s.Close(); err != nil {
-			t.Fatal(err)
-		}
-	})
-}
-
-func withKV(t *testing.T, fn func(kvdb.Store, kvdb.DirectorySubspace)) {
-	// Create database client
-	os.Mkdir("db", 0770)
-	defer os.RemoveAll("db")
-	bbs, err := bbolt.Open(path.Join("./db", t.Name()), 0600, "default")
-	if err != nil {
-		panic(errors.Wrap(err, "error opening DB"))
-	}
-	ctx := context.Background()
-
-	kvs := kvtrace.Trace(bbs)
-	defer kvs.Close()
-
-	kvs.Transact(ctx, func(tx kvdb.Transaction) (v interface{}, err error) {
-		// Just a test
-		return nil, nil
-	})
-	dir, err := kvs.CreateOrOpenDir([]string{"foo"})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	fn(kvs, dir)
 }
 
 type aggregate struct {
