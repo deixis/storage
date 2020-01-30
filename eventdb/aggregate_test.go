@@ -2,15 +2,9 @@ package eventdb_test
 
 import (
 	"context"
-	"os"
-	"path"
 	"testing"
 
-	"github.com/deixis/errors"
 	"github.com/deixis/storage/eventdb"
-	"github.com/deixis/storage/kvdb"
-	"github.com/deixis/storage/kvdb/driver/bbolt"
-	"github.com/deixis/storage/kvdb/kvtrace"
 )
 
 func init() {
@@ -23,14 +17,10 @@ func TestAggregate_LoadEmptyStream(t *testing.T) {
 	ctx := context.Background()
 
 	aggr := aggregate{}
-	withKV(t, func(kvs kvdb.Store, dir kvdb.DirectorySubspace) {
+	withEventDB(t, func(eventStore eventdb.Store) {
 		streamID := "alpha"
-		_, err := kvs.Transact(ctx, func(tx kvdb.Transaction) (v interface{}, err error) {
-			eventx, err := eventdb.Transact(tx, dir)
-			if err != nil {
-				return nil, err
-			}
-			if _, err := eventx.CreateStream(streamID); err != nil {
+		_, err := eventStore.Transact(ctx, func(tx eventdb.Transaction) (v interface{}, err error) {
+			if _, err := tx.CreateStream(streamID); err != nil {
 				t.Fatal("expect to create stream, but got error", err)
 			}
 			return nil, nil
@@ -39,12 +29,8 @@ func TestAggregate_LoadEmptyStream(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		_, err = kvs.ReadTransact(ctx, func(tx kvdb.ReadTransaction) (v interface{}, err error) {
-			eventx, err := eventdb.ReadTransact(tx, dir)
-			if err != nil {
-				return nil, err
-			}
-			aggReader := eventdb.NewAggregateReader(eventx.ReadStream(streamID))
+		_, err = eventStore.ReadTransact(ctx, func(tx eventdb.ReadTransaction) (v interface{}, err error) {
+			aggReader := eventdb.NewAggregateReader(tx.ReadStream(streamID))
 			if err := aggReader.Latest(&aggr); err != nil {
 				t.Fatal("error loading latest aggregate", err)
 			}
@@ -68,18 +54,14 @@ func TestAggregate_Latest(t *testing.T) {
 	ctx := context.Background()
 
 	aggr := aggregate{}
-	withKV(t, func(kvs kvdb.Store, dir kvdb.DirectorySubspace) {
+	withEventDB(t, func(eventStore eventdb.Store) {
 		streamID := "alpha"
-		_, err := kvs.Transact(ctx, func(tx kvdb.Transaction) (v interface{}, err error) {
-			eventx, err := eventdb.Transact(tx, dir)
-			if err != nil {
-				return nil, err
-			}
-			if _, err := eventx.CreateStream(streamID); err != nil {
+		_, err := eventStore.Transact(ctx, func(tx eventdb.Transaction) (v interface{}, err error) {
+			if _, err := tx.CreateStream(streamID); err != nil {
 				t.Fatal("expect to create stream, but got error", err)
 			}
 
-			aggregater := eventdb.NewAggregater(eventx.Stream(streamID))
+			aggregater := eventdb.NewAggregater(tx.Stream(streamID))
 			if err := aggregater.Append(0, &eventCreated{}); err != nil {
 				t.Fatal("error appending event to aggregate store", err)
 			}
@@ -95,12 +77,8 @@ func TestAggregate_Latest(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		_, err = kvs.ReadTransact(ctx, func(tx kvdb.ReadTransaction) (v interface{}, err error) {
-			eventx, err := eventdb.ReadTransact(tx, dir)
-			if err != nil {
-				return nil, err
-			}
-			aggReader := eventdb.NewAggregateReader(eventx.ReadStream(streamID))
+		_, err = eventStore.ReadTransact(ctx, func(tx eventdb.ReadTransaction) (v interface{}, err error) {
+			aggReader := eventdb.NewAggregateReader(tx.ReadStream(streamID))
 			if err := aggReader.Latest(&aggr); err != nil {
 				t.Fatal("error loading latest aggregate", err)
 			}
@@ -126,18 +104,14 @@ func TestAggregate_LoadVersion(t *testing.T) {
 
 	aggr := aggregate{}
 	var loadVersion uint64 = 2
-	withKV(t, func(kvs kvdb.Store, dir kvdb.DirectorySubspace) {
+	withEventDB(t, func(eventStore eventdb.Store) {
 		streamID := "alpha"
-		_, err := kvs.Transact(ctx, func(tx kvdb.Transaction) (v interface{}, err error) {
-			eventx, err := eventdb.Transact(tx, dir)
-			if err != nil {
-				return nil, err
-			}
-			if _, err := eventx.CreateStream(streamID); err != nil {
+		_, err := eventStore.Transact(ctx, func(tx eventdb.Transaction) (v interface{}, err error) {
+			if _, err := tx.CreateStream(streamID); err != nil {
 				t.Fatal("expect to create stream, but got error", err)
 			}
 
-			aggregater := eventdb.NewAggregater(eventx.Stream(streamID))
+			aggregater := eventdb.NewAggregater(tx.Stream(streamID))
 			if err := aggregater.Append(0, &eventCreated{}); err != nil {
 				t.Fatal("error appending event to aggregate store", err)
 			}
@@ -153,12 +127,8 @@ func TestAggregate_LoadVersion(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		_, err = kvs.ReadTransact(ctx, func(tx kvdb.ReadTransaction) (v interface{}, err error) {
-			eventx, err := eventdb.ReadTransact(tx, dir)
-			if err != nil {
-				return nil, err
-			}
-			aggReader := eventdb.NewAggregateReader(eventx.ReadStream(streamID))
+		_, err = eventStore.ReadTransact(ctx, func(tx eventdb.ReadTransaction) (v interface{}, err error) {
+			aggReader := eventdb.NewAggregateReader(tx.ReadStream(streamID))
 			if err := aggReader.Load(&aggr, loadVersion); err != nil {
 				t.Fatal("error loading latest aggregate", err)
 			}
@@ -175,29 +145,6 @@ func TestAggregate_LoadVersion(t *testing.T) {
 	if aggr.version != loadVersion {
 		t.Errorf("expect to get an aggregate with version %d, but got version %d", loadVersion, aggr.version)
 	}
-}
-
-func withKV(t *testing.T, fn func(kvdb.Store, kvdb.DirectorySubspace)) {
-	// Create database client
-	os.Mkdir("db", 0770)
-	defer os.RemoveAll("db")
-	bbs, err := bbolt.Open(path.Join("./db", t.Name()), 0600, "default")
-	if err != nil {
-		panic(errors.Wrap(err, "error opening DB"))
-	}
-	ctx := context.Background()
-
-	kvs := kvtrace.Trace(bbs)
-	kvs.Transact(ctx, func(tx kvdb.Transaction) (v interface{}, err error) {
-		// Just a test
-		return nil, nil
-	})
-	dir, err := kvs.CreateOrOpenDir([]string{"foo"})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	fn(kvs, dir)
 }
 
 type aggregate struct {

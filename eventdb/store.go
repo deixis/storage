@@ -2,11 +2,14 @@ package eventdb
 
 import (
 	"context"
+	"fmt"
+	"sync"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/apple/foundationdb/bindings/go/src/fdb/tuple"
 	"github.com/deixis/errors"
 	"github.com/deixis/pkg/utc"
+	"github.com/deixis/spine/net/pubsub"
 	"github.com/deixis/storage/eventdb/eventpb"
 	"github.com/deixis/storage/kvdb"
 	"github.com/deixis/storage/kvdb/driver/foundationdb"
@@ -19,9 +22,10 @@ const (
 	nsIndex  = 0x02
 
 	// Stream namespaces
-	nsStreamEvent    = 0x00
-	nsStreamSnapshot = 0x01
-	nsStreamMeta     = 0x02
+	nsStreamEvent        = 0x00
+	nsStreamSnapshot     = 0x01
+	nsStreamMeta         = 0x02
+	nsStreamSubscription = 0x03
 
 	// Index namespaces
 	nsIndexStreamID = 0x01
@@ -32,26 +36,32 @@ var (
 	lastKey  = tuple.UUID{0xFF}
 )
 
-func Transact(tx kvdb.Transaction, ss kvdb.Subspace) (Transaction, error) {
-	t := &transaction{T: tx, Ss: ss}
-	t.readTransaction.T = tx
-	t.readTransaction.Ss = ss
-	return t, nil
-}
-
-func ReadTransact(tx kvdb.ReadTransaction, ss kvdb.Subspace) (ReadTransaction, error) {
-	return &readTransaction{T: tx, Ss: ss}, nil
-}
-
 // Store is the EventDB storage interface
 type Store interface {
+	// Subscribe subscribes to a stream
+	Subscribe(
+		ctx context.Context,
+		streamID string,
+		group string,
+		subType SubscriptionType,
+		h EventHandler,
+	) (Subscription, error)
+
+	// Transact initiates a transaction
 	Transact(ctx context.Context, f func(Transaction) (interface{}, error)) (interface{}, error)
+	// Transact initiates a read-only transaction
 	ReadTransact(ctx context.Context, f func(ReadTransaction) (interface{}, error)) (interface{}, error)
 
-	WithTransact(kvdb.Transaction) Transaction
-	WithReadTransact(kvdb.ReadTransaction) ReadTransaction
+	// TODO: Allow to wrap KV transactions
+	// WithTransaction wraps a KV transaction into an EventDB transaction
+	// WithTransaction(ctx, tx kvdb.Transaction) Transaction
+	// WithReadTransaction wraps a KV read transaction into an EventDB read transaction
+	// WithReadTransaction(ctx, tx kvdb.ReadTransaction) ReadTransaction
 
-	CreateOrOpenDir(path []string) (kvdb.DirectorySubspace, error)
+	// KV returns the underlying KV store instance
+	KV() kvdb.Store
+
+	// Close closes the store
 	Close() error
 }
 
@@ -61,6 +71,9 @@ type ReadTransaction interface {
 	ReadStream(id string) StreamReader
 	// ReadStreams returns a range of streamss
 	ReadStreams(opts ...kvdb.RangeOption) StreamReadersRangeResult
+
+	// ReadTransaction returns the underlying KV read transaction
+	ReadTransaction() kvdb.ReadTransaction
 }
 
 // WriteTransaction is a read-write transaction
@@ -73,6 +86,178 @@ type WriteTransaction interface {
 type Transaction interface {
 	ReadTransaction
 	WriteTransaction
+
+	// Transaction returns the underlying KV transaction
+	Transaction() kvdb.Transaction
+}
+
+type EventHandler func(ctx context.Context, e Event) error
+
+type store struct {
+	mu sync.Mutex
+
+	kv kvdb.Store
+	ss kvdb.Subspace
+
+	pubSub      pubsub.PubSub
+	drainPubSub bool
+	watchers    map[string][]*subscriptionWatcher
+}
+
+// New creates a new EventDB store
+func New(
+	s kvdb.Store,
+	ss kvdb.Subspace,
+	storeOpts ...StoreOption,
+) (Store, error) {
+	opts := defaultStoreOptions()
+	for _, opt := range storeOpts {
+		opt.apply(opts)
+	}
+
+	eventStore := &store{
+		kv:          s,
+		ss:          ss,
+		pubSub:      opts.pubSub,
+		drainPubSub: opts.drainPubSub,
+		watchers:    map[string][]*subscriptionWatcher{},
+	}
+
+	return eventStore, nil
+}
+
+func (s *store) Subscribe(
+	ctx context.Context,
+	streamID, group string,
+	subType SubscriptionType,
+	h EventHandler,
+) (sub Subscription, err error) {
+	// Check whether we have a persisted subscription
+	var streamMeta *StreamMetadata
+	_, err = s.ReadTransact(ctx, func(tx ReadTransaction) (interface{}, error) {
+		stream := tx.ReadStream(streamID)
+		meta, err := stream.Metadata()
+		if err != nil {
+			return nil, err
+		}
+		streamMeta = &meta
+
+		sub, err = stream.Subscription(group)
+		if err != nil {
+			// An error is expected for transient subscriptions
+			return nil, err
+		}
+		return nil, nil
+	})
+	switch err {
+	case nil:
+		// Persisted sub
+		if subType != SubscriptionTypePersistent {
+			return nil, errors.New("error creating transient subscription as there is already a persisted subscription with the same group name")
+		}
+	case ErrSubscriptionNotFound:
+		// Transient sub
+		switch subType {
+		case SubscriptionTypeCatchUp:
+			sub = newCatchUpSubscription(streamMeta, group)
+		case SubscriptionTypeVolatile:
+			sub = newVolatileSubscription(streamMeta, group)
+		case SubscriptionTypePersistent:
+			return nil, err
+		default:
+			return nil, fmt.Errorf("error creating subscription with type <%s>", subType)
+		}
+	default:
+		return nil, err
+	}
+
+	subMeta, err := sub.Meta()
+	if err != nil {
+		return nil, err
+	}
+
+	w := newSubscriptionWatcher()
+	w.StreamMeta = streamMeta
+	w.SubMeta = &subMeta
+	w.Sub = s.pubSub
+	w.Store = s
+	w.EventHandler = h
+
+	go w.Start(ctx)
+
+	s.mu.Lock()
+	s.watchers[streamID] = append(s.watchers[streamID], w)
+	s.mu.Unlock()
+
+	return w, nil
+}
+
+func (s *store) Transact(
+	ctx context.Context, fn func(Transaction) (interface{}, error),
+) (interface{}, error) {
+	// Execute transaction first to make sure subscribers receive only commited changes
+	pub := &transactionPublisher{}
+	v, err := s.kv.Transact(ctx, func(kvtx kvdb.Transaction) (interface{}, error) {
+		tx, err := transact(kvtx, s.ss, pub)
+		if err != nil {
+			return nil, err
+		}
+		return fn(tx)
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Publish all events from the transaction
+	for i := range pub.events {
+		err := s.pubSub.Publish(ctx, pub.events[i].ch, pub.events[i].data)
+		if err != nil {
+			// TODO: Implement retry logic?
+			return nil, err
+		}
+	}
+
+	return v, nil
+}
+
+func (s *store) ReadTransact(
+	ctx context.Context, fn func(ReadTransaction) (interface{}, error),
+) (interface{}, error) {
+	return s.kv.ReadTransact(ctx, func(kvtx kvdb.ReadTransaction) (interface{}, error) {
+		tx, err := readTransact(kvtx, s.ss)
+		if err != nil {
+			return nil, err
+		}
+		return fn(tx)
+	})
+}
+
+func (s *store) KV() kvdb.Store {
+	return s.kv
+}
+
+func (s *store) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Close all subscription watchers
+	for _, watchers := range s.watchers {
+		for _, watcher := range watchers {
+			watcher.Close()
+		}
+	}
+
+	// Only drain internal pub sub instances
+	if s.drainPubSub {
+		s.pubSub.Drain()
+	}
+
+	// Finally close KV store
+	return s.kv.Close()
+}
+
+func readTransact(tx kvdb.ReadTransaction, ss kvdb.Subspace) (ReadTransaction, error) {
+	return &readTransaction{T: tx, Ss: ss}, nil
 }
 
 type readTransaction struct {
@@ -103,15 +288,29 @@ func (tx *readTransaction) ReadStreams(opts ...kvdb.RangeOption) StreamReadersRa
 	return &streamReadersRangeResult{R: res, Tx: tx.T, Ss: tx.Ss}
 }
 
+func (tx *readTransaction) ReadTransaction() kvdb.ReadTransaction {
+	return tx.T
+}
+
+func transact(
+	tx kvdb.Transaction, ss kvdb.Subspace, pub *transactionPublisher,
+) (Transaction, error) {
+	t := &transaction{T: tx, Ss: ss, Pub: pub}
+	t.readTransaction.T = tx
+	t.readTransaction.Ss = ss
+	return t, nil
+}
+
 type transaction struct {
 	readTransaction
 
-	T  kvdb.Transaction
-	Ss kvdb.Subspace
+	T   kvdb.Transaction
+	Ss  kvdb.Subspace
+	Pub *transactionPublisher
 }
 
 func (tx *transaction) Stream(id string) Stream {
-	return buildStreamTransaction(tx.T, tx.Ss, id)
+	return buildStreamTransaction(tx.T, tx.Ss, tx.Pub, id)
 }
 
 func (tx *transaction) CreateStream(id string) (Stream, error) {
@@ -153,7 +352,24 @@ func (tx *transaction) CreateStream(id string) (Stream, error) {
 	indexStreamKey := key(tx.Ss, nsIndex, nsIndexStreamID, id)
 	tx.T.Set(indexStreamKey, nil)
 
-	return buildStreamTransaction(tx.T, tx.Ss, id), nil
+	return buildStreamTransaction(tx.T, tx.Ss, tx.Pub, id), nil
+}
+
+func (tx *transaction) Transaction() kvdb.Transaction {
+	return tx.T
+}
+
+type transactionPublisher struct {
+	events []*pubEvent
+}
+
+func (p *transactionPublisher) Publish(ch string, data []byte) {
+	p.events = append(p.events, &pubEvent{ch: ch, data: data})
+}
+
+type pubEvent struct {
+	ch   string
+	data []byte
 }
 
 type streamReadTransaction struct {
@@ -289,6 +505,42 @@ func (tx *streamReadTransaction) Metadata() (StreamMetadata, error) {
 	return meta, nil
 }
 
+func (tx *streamReadTransaction) Subscriptions() SubscriptionsRangeResult {
+	keyRange := kvdb.KeyRange{
+		Begin: key(tx.Ss, nsStream, tx.ID, nsStreamSubscription, firstKey),
+		End:   key(tx.Ss, nsStream, tx.ID, nsStreamSubscription, lastKey),
+	}
+	res := tx.Tx.GetRange(
+		keyRange,
+		foundationdb.WithRangeStreamingMode(fdb.StreamingModeIterator),
+	)
+	return &subscriptionsRangeResult{
+		R:  res,
+		Ss: tx.Ss,
+		Tx: tx.Tx,
+	}
+}
+
+func (tx *streamReadTransaction) Subscription(group string) (Subscription, error) {
+	data, err := tx.Tx.Get(key(tx.Ss, nsStream, tx.ID, nsStreamSubscription, group)).Get()
+	if err != nil {
+		return nil, errors.Wrap(err, "error loading stream subscription")
+	}
+	if len(data) == 0 {
+		return nil, ErrSubscriptionNotFound
+	}
+	recordedMeta := eventpb.SubscriptionMetadata{}
+	if err := proto.Unmarshal(data, &recordedMeta); err != nil {
+		return nil, errors.Wrap(err, "error unmarshalling subscription meta")
+	}
+
+	meta := SubscriptionMetadata{}
+	meta.Unpack(&recordedMeta)
+	return &subscription{
+		meta: meta,
+	}, nil
+}
+
 func (tx *streamReadTransaction) loadMetadata() (*eventpb.StreamMetadata, error) {
 	if tx.ID == "" {
 		return nil, errors.New("stream ID is empty")
@@ -315,13 +567,18 @@ type streamTransaction struct {
 
 	Tx kvdb.Transaction
 	Ss kvdb.Subspace
+
+	Pub *transactionPublisher
 }
 
-func buildStreamTransaction(tx kvdb.Transaction, ss kvdb.Subspace, id string) *streamTransaction {
+func buildStreamTransaction(
+	tx kvdb.Transaction, ss kvdb.Subspace, pub *transactionPublisher, id string,
+) *streamTransaction {
 	t := &streamTransaction{
-		ID: id,
-		Tx: tx,
-		Ss: ss,
+		ID:  id,
+		Tx:  tx,
+		Ss:  ss,
+		Pub: pub,
 	}
 	t.streamReadTransaction.Tx = tx
 	t.streamReadTransaction.Ss = ss
@@ -352,6 +609,9 @@ func (tx *streamTransaction) AppendEvents(expectedVersion uint64, events ...*Rec
 			return errors.Wrap(err, "error marshalling event")
 		}
 		tx.Tx.Set(key(tx.Ss, nsStream, tx.ID, nsStreamEvent, expectedVersion+uint64(i)+1), data)
+
+		// Publish event
+		tx.Pub.Publish(tx.ID, data)
 	}
 
 	meta.Version += uint64(len(events))
@@ -388,6 +648,93 @@ func (tx *streamTransaction) ClearSnapshot(version uint64) {
 	tx.Tx.Clear(key(tx.Ss, nsStream, tx.ID, nsStreamSnapshot, version))
 }
 
+func (tx *streamTransaction) CreateSubscription(group string) (Subscription, error) {
+	if _, err := tx.loadMetadata(); err != nil {
+		return nil, err
+	}
+
+	subKey := key(tx.Ss, nsStream, tx.ID, nsStreamSubscription, group)
+	data, err := tx.Tx.Get(subKey).Get()
+	if err != nil {
+		return nil, errors.Wrap(err, "error loading stream subscription")
+	}
+	if len(data) > 0 {
+		return nil, errors.Aborted(&errors.ConflictViolation{
+			Resource: fmt.Sprintf("stream:%s/subscription:%s",
+				tx.ID,
+				group,
+			),
+			Description: "Subscription has already been created",
+		})
+	}
+
+	now := int64(utc.Now())
+	recordedMeta := eventpb.SubscriptionMetadata{
+		Key:              subKey,
+		Group:            group,
+		StreamID:         tx.ID,
+		Type:             eventpb.SubscriptionType_Persistent,
+		Position:         0, // Start from the beginning by default
+		CreationTime:     now,
+		ModificationTime: now,
+		DeletionTime:     0,
+		Extended:         map[string]string{},
+	}
+	data, err = proto.Marshal(&recordedMeta)
+	if err != nil {
+		return nil, errors.Wrap(err, "error marshalling subscription meta")
+	}
+	tx.Tx.Set(key(tx.Ss, nsStream, tx.ID, nsStreamSubscription, group), data)
+
+	meta := SubscriptionMetadata{}
+	meta.Unpack(&recordedMeta)
+	return &subscription{
+		meta: meta,
+	}, nil
+}
+
+func (tx *streamTransaction) DeleteSubscription(group string) error {
+	// Pull subscription from storage
+	subKey := key(tx.Ss, nsStream, tx.ID, nsStreamSubscription, group)
+	data, err := tx.Tx.Get(subKey).Get()
+	if err != nil {
+		return errors.Wrap(err, "error loading stream subscription")
+	}
+	if len(data) == 0 {
+		return ErrSubscriptionNotFound
+	}
+	subMeta := eventpb.SubscriptionMetadata{}
+	if err := proto.Unmarshal(data, &subMeta); err != nil {
+		return errors.Wrap(err, "error unmarshalling subscription meta")
+	}
+
+	// Validation checks
+	if subMeta.DeletionTime != 0 {
+		return errors.Aborted(&errors.ConflictViolation{
+			Resource: fmt.Sprintf("stream:%s/subscription:%s",
+				tx.ID,
+				group,
+			),
+			Description: "Subscription has already been deleted",
+		})
+	}
+
+	// Update subscription metadata
+	now := int64(utc.Now())
+	subMeta.ModificationTime = now
+	subMeta.DeletionTime = now
+
+	// TODO: Disconnect subscriptions
+
+	// Persist back to store
+	data, err = proto.Marshal(&subMeta)
+	if err != nil {
+		return errors.Wrap(err, "error marshalling subscription meta")
+	}
+	tx.Tx.Set(key(tx.Ss, nsStream, tx.ID, nsStreamSubscription, group), data)
+	return nil
+}
+
 func (tx *streamTransaction) Delete() error {
 	meta, err := tx.loadMetadata()
 	if err != nil {
@@ -396,7 +743,7 @@ func (tx *streamTransaction) Delete() error {
 	if meta.DeletionTime != 0 {
 		return errors.Aborted(&errors.ConflictViolation{
 			Resource:    "stream:" + meta.ID,
-			Description: "Stream has already been created",
+			Description: "Stream has already been deleted",
 		})
 	}
 
@@ -406,10 +753,15 @@ func (tx *streamTransaction) Delete() error {
 	tx.setMetadata(meta)
 
 	tx.deleteIndices()
+	tx.closeStreamWatchers()
 	return nil
 }
 
 func (tx *streamTransaction) PermanentlyDelete() {
+	// Close watchers first to make sure they don't write on the stream namespace
+	// after clear range
+	tx.closeStreamWatchers()
+
 	// Cleanup stream namespace
 	tx.Tx.ClearRange(kvdb.KeyRange{
 		Begin: key(tx.Ss, nsStream, tx.ID, firstKey),
@@ -417,6 +769,10 @@ func (tx *streamTransaction) PermanentlyDelete() {
 	})
 
 	tx.deleteIndices()
+}
+
+func (tx *streamTransaction) closeStreamWatchers() {
+	// TODO: Close all stream watchers
 }
 
 func (tx *streamTransaction) deleteIndices() {
@@ -585,5 +941,62 @@ func (i *streamReadersRangeIterator) Get() (StreamReader, error) {
 		Tx: i.Tx,
 		Ss: i.Ss,
 		ID: id,
+	}, nil
+}
+
+type subscriptionsRangeResult struct {
+	R  kvdb.RangeResult
+	Ss kvdb.Subspace
+	Tx kvdb.ReadTransaction
+}
+
+func (r *subscriptionsRangeResult) GetSliceWithError() (subscriptions []Subscription, err error) {
+	i := r.Iterator()
+	for i.Advance() {
+		liq, err := i.Get()
+		if err != nil {
+			return nil, err
+		}
+		subscriptions = append(subscriptions, liq)
+	}
+	return subscriptions, nil
+}
+
+func (r *subscriptionsRangeResult) Count() (count int) {
+	i := r.Iterator()
+	for i.Advance() {
+		count++
+	}
+	return count
+}
+
+func (r *subscriptionsRangeResult) Iterator() SubscriptionsRangeIterator {
+	return &subscriptionsRangeIterator{I: r.R.Iterator(), Tx: r.Tx, Ss: r.Ss}
+}
+
+type subscriptionsRangeIterator struct {
+	I  kvdb.RangeIterator
+	Ss kvdb.Subspace
+	Tx kvdb.ReadTransaction
+}
+
+func (i *subscriptionsRangeIterator) Advance() bool {
+	return i.I.Advance()
+}
+
+func (i *subscriptionsRangeIterator) Get() (Subscription, error) {
+	kv, err := i.I.Get()
+	if err != nil {
+		return nil, err
+	}
+	recordedMeta := eventpb.SubscriptionMetadata{}
+	if err := proto.Unmarshal(kv.Value, &recordedMeta); err != nil {
+		return nil, errors.Wrap(err, "error unmarshalling subscription meta")
+	}
+
+	meta := SubscriptionMetadata{}
+	meta.Unpack(&recordedMeta)
+	return &subscription{
+		meta: meta,
 	}, nil
 }

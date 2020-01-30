@@ -5,30 +5,25 @@ import (
 	"testing"
 
 	"github.com/deixis/storage/eventdb"
-	"github.com/deixis/storage/kvdb"
 )
 
 func TestStream_Range(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	withKV(t, func(kvs kvdb.Store, dir kvdb.DirectorySubspace) {
+	withEventDB(t, func(eventStore eventdb.Store) {
 		streamIDs := []string{
 			"alpha",
 			"beta",
 		}
 
-		_, err := kvs.Transact(ctx, func(tx kvdb.Transaction) (v interface{}, err error) {
-			eventx, err := eventdb.Transact(tx, dir)
-			if err != nil {
-				return nil, err
-			}
+		_, err := eventStore.Transact(ctx, func(tx eventdb.Transaction) (v interface{}, err error) {
 			for _, streamID := range streamIDs {
-				if _, err := eventx.CreateStream(streamID); err != nil {
+				if _, err := tx.CreateStream(streamID); err != nil {
 					t.Fatal("expect to create stream, but got error", err)
 				}
 
-				aggregater := eventdb.NewAggregater(eventx.Stream(streamID))
+				aggregater := eventdb.NewAggregater(tx.Stream(streamID))
 				if err := aggregater.Append(0, &eventCreated{}); err != nil {
 					t.Fatal("error appending event to aggregate store", err)
 				}
@@ -45,12 +40,8 @@ func TestStream_Range(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		_, err = kvs.ReadTransact(ctx, func(tx kvdb.ReadTransaction) (v interface{}, err error) {
-			eventx, err := eventdb.ReadTransact(tx, dir)
-			if err != nil {
-				return nil, err
-			}
-			res := eventx.ReadStreams()
+		_, err = eventStore.ReadTransact(ctx, func(tx eventdb.ReadTransaction) (v interface{}, err error) {
+			res := tx.ReadStreams()
 			streams, err := res.GetSliceWithError()
 			if err != nil {
 				t.Fatal("expect to create stream, but got error", err)
@@ -71,19 +62,15 @@ func TestStream_RangeAfterSoftDelete(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	withKV(t, func(kvs kvdb.Store, dir kvdb.DirectorySubspace) {
+	withEventDB(t, func(eventStore eventdb.Store) {
 		streamIDs := []string{
 			"alpha",
 			"beta",
 		}
 
-		_, err := kvs.Transact(ctx, func(tx kvdb.Transaction) (v interface{}, err error) {
-			eventx, err := eventdb.Transact(tx, dir)
-			if err != nil {
-				return nil, err
-			}
+		_, err := eventStore.Transact(ctx, func(tx eventdb.Transaction) (v interface{}, err error) {
 			for _, streamID := range streamIDs {
-				stream, err := eventx.CreateStream(streamID)
+				stream, err := tx.CreateStream(streamID)
 				if err != nil {
 					t.Fatal("expect to create stream, but got error", err)
 				}
@@ -97,12 +84,8 @@ func TestStream_RangeAfterSoftDelete(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		_, err = kvs.ReadTransact(ctx, func(tx kvdb.ReadTransaction) (v interface{}, err error) {
-			eventx, err := eventdb.ReadTransact(tx, dir)
-			if err != nil {
-				return nil, err
-			}
-			res := eventx.ReadStreams()
+		_, err = eventStore.ReadTransact(ctx, func(tx eventdb.ReadTransaction) (v interface{}, err error) {
+			res := tx.ReadStreams()
 			streams, err := res.GetSliceWithError()
 			if err != nil {
 				t.Fatal("expect to create stream, but got error", err)
@@ -124,19 +107,15 @@ func TestStream_RangeAfterPermanentDelete(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	withKV(t, func(kvs kvdb.Store, dir kvdb.DirectorySubspace) {
+	withEventDB(t, func(eventStore eventdb.Store) {
 		streamIDs := []string{
 			"alpha",
 			"beta",
 		}
 
-		_, err := kvs.Transact(ctx, func(tx kvdb.Transaction) (v interface{}, err error) {
-			eventx, err := eventdb.Transact(tx, dir)
-			if err != nil {
-				return nil, err
-			}
+		_, err := eventStore.Transact(ctx, func(tx eventdb.Transaction) (v interface{}, err error) {
 			for _, streamID := range streamIDs {
-				stream, err := eventx.CreateStream(streamID)
+				stream, err := tx.CreateStream(streamID)
 				if err != nil {
 					t.Fatal("expect to create stream, but got error", err)
 				}
@@ -148,12 +127,8 @@ func TestStream_RangeAfterPermanentDelete(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		_, err = kvs.ReadTransact(ctx, func(tx kvdb.ReadTransaction) (v interface{}, err error) {
-			eventx, err := eventdb.ReadTransact(tx, dir)
-			if err != nil {
-				return nil, err
-			}
-			res := eventx.ReadStreams()
+		_, err = eventStore.ReadTransact(ctx, func(tx eventdb.ReadTransaction) (v interface{}, err error) {
+			res := tx.ReadStreams()
 			streams, err := res.GetSliceWithError()
 			if err != nil {
 				t.Fatal("expect to create stream, but got error", err)

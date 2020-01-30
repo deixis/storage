@@ -2,7 +2,6 @@ package eventdb_test
 
 import (
 	"context"
-	"os"
 	"path"
 	"testing"
 
@@ -17,8 +16,6 @@ func TestDB_Init(t *testing.T) {
 	t.Parallel()
 
 	// Create database client
-	os.Mkdir("db", 0770)
-	defer os.RemoveAll("db")
 	bbs, err := bbolt.Open(path.Join("./db", t.Name()), 0600, "default")
 	if err != nil {
 		panic(errors.Wrap(err, "error opening DB"))
@@ -34,27 +31,33 @@ func TestDB_Init(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	eventStore, err := eventdb.New(kvs, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	_, err = kvs.Transact(ctx, func(tx kvdb.Transaction) (v interface{}, err error) {
-		_, err = eventdb.Transact(tx, dir)
-		if err != nil {
-			return nil, err
-		}
+	var transactCalled bool
+	_, err = eventStore.Transact(ctx, func(tx eventdb.Transaction) (v interface{}, err error) {
+		transactCalled = true
 		return nil, nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !transactCalled {
+		t.Error("expect transaction to be called, but got nothing")
+	}
 
-	_, err = kvs.ReadTransact(ctx, func(tx kvdb.ReadTransaction) (v interface{}, err error) {
-		_, err = eventdb.ReadTransact(tx, dir)
-		if err != nil {
-			return nil, err
-		}
+	var readTransactCalled bool
+	_, err = eventStore.ReadTransact(ctx, func(tx eventdb.ReadTransaction) (v interface{}, err error) {
+		readTransactCalled = true
 		return nil, nil
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !readTransactCalled {
+		t.Error("expect read transaction to be called, but got nothing")
 	}
 }
 
@@ -62,8 +65,6 @@ func TestStream_Create(t *testing.T) {
 	t.Parallel()
 
 	// Create database client
-	os.Mkdir("db", 0770)
-	defer os.RemoveAll("db")
 	bbs, err := bbolt.Open(path.Join("./db", t.Name()), 0600, "default")
 	if err != nil {
 		panic(errors.Wrap(err, "error opening DB"))
@@ -79,15 +80,14 @@ func TestStream_Create(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	eventStore, err := eventdb.New(kvs, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	streamID := "alpha"
-	_, err = kvs.Transact(ctx, func(tx kvdb.Transaction) (v interface{}, err error) {
-		eventx, err := eventdb.Transact(tx, dir)
-		if err != nil {
-			return nil, err
-		}
-
-		stream, err := eventx.CreateStream(streamID)
+	_, err = eventStore.Transact(ctx, func(tx eventdb.Transaction) (v interface{}, err error) {
+		stream, err := tx.CreateStream(streamID)
 		if err != nil {
 			t.Fatal("expect to create stream, but got error", err)
 		}
@@ -100,7 +100,7 @@ func TestStream_Create(t *testing.T) {
 			t.Errorf("expect to get stream ID %s on metadata, but got %s", streamID, meta.ID)
 		}
 
-		_, err = eventx.CreateStream(streamID)
+		_, err = tx.CreateStream(streamID)
 		if !errors.IsAborted(err) {
 			t.Error("expect to get an ID conflict when creating the stream, but got", err)
 		}
@@ -110,13 +110,8 @@ func TestStream_Create(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = kvs.ReadTransact(ctx, func(tx kvdb.ReadTransaction) (v interface{}, err error) {
-		eventx, err := eventdb.ReadTransact(tx, dir)
-		if err != nil {
-			return nil, err
-		}
-
-		stream := eventx.ReadStream(streamID)
+	_, err = eventStore.ReadTransact(ctx, func(tx eventdb.ReadTransaction) (v interface{}, err error) {
+		stream := tx.ReadStream(streamID)
 		meta, err := stream.Metadata()
 		if err != nil {
 			t.Fatal("expect to load stream metadata, but got", err)
@@ -135,8 +130,6 @@ func TestStream_Events(t *testing.T) {
 	t.Parallel()
 
 	// Create database client
-	os.Mkdir("db", 0770)
-	defer os.RemoveAll("db")
 	bbs, err := bbolt.Open(path.Join("./db", t.Name()), 0600, "default")
 	if err != nil {
 		panic(errors.Wrap(err, "error opening DB"))
@@ -152,15 +145,14 @@ func TestStream_Events(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	eventStore, err := eventdb.New(kvs, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	streamID := "alpha"
-	_, err = kvs.Transact(ctx, func(tx kvdb.Transaction) (v interface{}, err error) {
-		eventx, err := eventdb.Transact(tx, dir)
-		if err != nil {
-			return nil, err
-		}
-
-		stream, err := eventx.CreateStream(streamID)
+	_, err = eventStore.Transact(ctx, func(tx eventdb.Transaction) (v interface{}, err error) {
+		stream, err := tx.CreateStream(streamID)
 		if err != nil {
 			t.Fatal("expect to create stream, but got error", err)
 		}
@@ -187,13 +179,8 @@ func TestStream_Events(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = kvs.ReadTransact(ctx, func(tx kvdb.ReadTransaction) (v interface{}, err error) {
-		eventx, err := eventdb.ReadTransact(tx, dir)
-		if err != nil {
-			return nil, err
-		}
-
-		stream := eventx.ReadStream(streamID)
+	_, err = eventStore.ReadTransact(ctx, func(tx eventdb.ReadTransaction) (v interface{}, err error) {
+		stream := tx.ReadStream(streamID)
 		events, err := stream.Events(0).GetSliceWithError()
 		if err != nil {
 			t.Fatal("expect to read events, but got", err)
@@ -213,8 +200,6 @@ func TestStream_Snapshot(t *testing.T) {
 	t.Parallel()
 
 	// Create database client
-	os.Mkdir("db", 0770)
-	defer os.RemoveAll("db")
 	bbs, err := bbolt.Open(path.Join("./db", t.Name()), 0600, "default")
 	if err != nil {
 		panic(errors.Wrap(err, "error opening DB"))
@@ -230,15 +215,14 @@ func TestStream_Snapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	eventStore, err := eventdb.New(kvs, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	streamID := "alpha"
-	_, err = kvs.Transact(ctx, func(tx kvdb.Transaction) (v interface{}, err error) {
-		eventx, err := eventdb.Transact(tx, dir)
-		if err != nil {
-			return nil, err
-		}
-
-		stream, err := eventx.CreateStream(streamID)
+	_, err = eventStore.Transact(ctx, func(tx eventdb.Transaction) (v interface{}, err error) {
+		stream, err := tx.CreateStream(streamID)
 		if err != nil {
 			t.Fatal("expect to create stream, but got error", err)
 		}
@@ -272,13 +256,8 @@ func TestStream_Snapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = kvs.ReadTransact(ctx, func(tx kvdb.ReadTransaction) (v interface{}, err error) {
-		eventx, err := eventdb.ReadTransact(tx, dir)
-		if err != nil {
-			return nil, err
-		}
-
-		stream := eventx.ReadStream(streamID)
+	_, err = eventStore.ReadTransact(ctx, func(tx eventdb.ReadTransaction) (v interface{}, err error) {
+		stream := tx.ReadStream(streamID)
 		events, err := stream.Events(0).GetSliceWithError()
 		if err != nil {
 			t.Fatal("expect to read events, but got", err)
@@ -298,8 +277,6 @@ func TestStream_Isolation(t *testing.T) {
 	t.Parallel()
 
 	// Create database client
-	os.Mkdir("db", 0770)
-	defer os.RemoveAll("db")
 	bbs, err := bbolt.Open(path.Join("./db", t.Name()), 0600, "default")
 	if err != nil {
 		panic(errors.Wrap(err, "error opening DB"))
@@ -315,16 +292,15 @@ func TestStream_Isolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	eventStore, err := eventdb.New(kvs, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	streamID := "alpha"
 	otherID := "beta"
-	_, err = kvs.Transact(ctx, func(tx kvdb.Transaction) (v interface{}, err error) {
-		eventx, err := eventdb.Transact(tx, dir)
-		if err != nil {
-			return nil, err
-		}
-
-		other, err := eventx.CreateStream(otherID)
+	_, err = eventStore.Transact(ctx, func(tx eventdb.Transaction) (v interface{}, err error) {
+		other, err := tx.CreateStream(otherID)
 		if err != nil {
 			t.Fatal("expect to create stream, but got error", err)
 		}
@@ -351,13 +327,8 @@ func TestStream_Isolation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = kvs.ReadTransact(ctx, func(tx kvdb.ReadTransaction) (v interface{}, err error) {
-		eventx, err := eventdb.ReadTransact(tx, dir)
-		if err != nil {
-			return nil, err
-		}
-
-		stream := eventx.ReadStream(streamID)
+	_, err = eventStore.ReadTransact(ctx, func(tx eventdb.ReadTransaction) (v interface{}, err error) {
+		stream := tx.ReadStream(streamID)
 		events, err := stream.Events(0).GetSliceWithError()
 		if err != nil {
 			t.Fatal("expect to read events, but got", err)
@@ -377,8 +348,6 @@ func TestStream_SoftDeletion(t *testing.T) {
 	t.Parallel()
 
 	// Create database client
-	os.Mkdir("db", 0770)
-	defer os.RemoveAll("db")
 	bbs, err := bbolt.Open(path.Join("./db", t.Name()), 0600, "default")
 	if err != nil {
 		panic(errors.Wrap(err, "error opening DB"))
@@ -394,15 +363,14 @@ func TestStream_SoftDeletion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	eventStore, err := eventdb.New(kvs, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	streamID := "alpha"
-	_, err = kvs.Transact(ctx, func(tx kvdb.Transaction) (v interface{}, err error) {
-		eventx, err := eventdb.Transact(tx, dir)
-		if err != nil {
-			return nil, err
-		}
-
-		stream, err := eventx.CreateStream(streamID)
+	_, err = eventStore.Transact(ctx, func(tx eventdb.Transaction) (v interface{}, err error) {
+		stream, err := tx.CreateStream(streamID)
 		if err != nil {
 			t.Fatal("expect to create stream, but got error", err)
 		}
@@ -423,13 +391,8 @@ func TestStream_SoftDeletion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = kvs.ReadTransact(ctx, func(tx kvdb.ReadTransaction) (v interface{}, err error) {
-		eventx, err := eventdb.ReadTransact(tx, dir)
-		if err != nil {
-			return nil, err
-		}
-
-		stream := eventx.ReadStream(streamID)
+	_, err = eventStore.ReadTransact(ctx, func(tx eventdb.ReadTransaction) (v interface{}, err error) {
+		stream := tx.ReadStream(streamID)
 		meta, err := stream.Metadata()
 		if err != nil {
 			t.Fatal("expect to get stream metadata, but got", err)

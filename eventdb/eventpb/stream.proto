@@ -4,7 +4,7 @@ option go_package = "github.com/deixis/storage/eventdb/eventpb";
 
 package eventpb;
 
-// StreamMetadata contains all the data about a specific event.
+// StreamMetadata contains all the data about a specific stream.
 message StreamMetadata {
 	bytes key = 1;
 	string ID = 2;
