@@ -1,5 +1,7 @@
 # EventDB - Event store
 
+## Introduction
+
 Package eventdb (event sourcing) is a small library for event sourcing
 
 Event sourcing persists the state of a business entity such an Order or a
@@ -14,12 +16,6 @@ The event store also behaves like a message broker. It provides an API that
 enables services to subscribe to events. When a service saves an event in
 the event store, it is delivered to all interested subscribers.
 
-Some entities, such as a Customer, can have a large number of events.
-In order to optimise loading, an application can periodically save a snapshot
-of an entity’s current state. To reconstruct the current state,
-the application finds the most recent snapshot and the events that have
-occurred since that snapshot. As a result, there are fewer events to replay.
-
 **There is no Delete**
 
 It is not possible to jump into the time machine and say that an event never
@@ -27,11 +23,39 @@ occurred (eg: delete a previous event).
 As such, it is necessary to model a delete explicitly as a new transaction.
 e.g. InvoiceCreated, InvoiceUpdated, and InvoiceDeleted
 
+## Aggregate
+
+An Aggregate is a cluster of domain objects that can be treated as a single unit.
+An aggregate state is a projection of all of its events.
+
+The majority of the application’s business logic is implemented by aggregates.
+An aggregate does two things:
+- Processes commands and returns events, which leaves the state of the
+	aggregate unchanged.
+- Consumes events, which updates its state.
+
+Aggregate comes from the DDD (domain-driver design) terminology
+
+## Snapshot
+
+A snapshot is a projection of the current state of an aggregate at a given point. It represents the state when all events to that point have been replayed. You use snapshots as a heuristic to prevent the need to load all events for the entire history of an aggregate. One way of processing events in the event stream is to replay the events from the beginning of time until the end of the event stream.
+
+The problem is that there may be a large number of events between the beginning of time and the current point. You can imagine that an event stream with a million or more events would be inefficient to load.
+
+The solution is to use a snapshot to place a denormalisation of the state at a given point. It is then possible to play the events from that point forward to load the aggregate.
+
 ## Subscription
 
-### Volatile
+Subscriptions support the "competing consumers" messaging pattern. That means
+it is possible to have a group of consumers that competes on the same subscription,
+with each subscription getting an at-least-once guarantee. It is particularily
+useful on a distributed environment.
 
-SubscriptionTypeVolatile calls a given function for events written after
+### Types
+
+**Volatile**
+
+Volatile subscription calls a given function for events written after
 establishing the subscription. They are useful when you need notification
 of new events with minimal latency, but where it's not necessary to process
 every event.
@@ -40,9 +64,9 @@ For example, if a stream has 100 events in it when a subscriber connects,
 the subscriber can expect to see event number 101 onwards until the time
 the subscription is closed or dropped.
 
-### Catch up
+**Catch up**
 
-SubscriptionTypeCatchUp specifies a starting point, in the form of an event
+Catch up subscription specifies a starting point, in the form of an event
 number or transaction file position. You call the function for events from
 the starting point until the end of the stream, and then for subsequently
 written events.
@@ -52,17 +76,25 @@ events, the subscriber can expect to see events 51 through 100, and then
 any events are subsequently written until you drop or close the
 subscription.
 
-### Persistent
+**Persistent**
 
-SubscriptionTypePersistent supports the "competing consumers" messaging
-pattern and are useful when you need to distribute messages to many workers.
-
-EventDB saves the subscription state and allows for at-least-once delivery
-guarantees across multiple consumers on the same stream.
-It is possible to have many groups of consumers compete on the same stream,
-with each group getting an at-least-once guarantee.
+Persistent subscription saves the subscription state on EventDB, so consumers
+don't have to keep track of processed events on a stream.
 
 Note: Persistent require to create a persistent subscription first.
+
+```go
+stream, err := tx.CreateStream("my-stream")
+if err != nil {
+	panic(err)
+}
+
+// CreateSubscription creates a persistent subscription for `my-stream`
+sub, err := stream.CreateSubscription("my-subscription-group")
+if err != nil {
+	panic(err)
+}
+```
 
 ## Projection
 
@@ -130,3 +162,7 @@ if err != nil {
 	panic(err)
 }
 ```
+
+## Credits
+
+This package is heavily inspired from [Event Store](https://eventstore.org/).
