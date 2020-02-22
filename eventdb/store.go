@@ -58,6 +58,8 @@ type Store interface {
 	// WithReadTransaction wraps a KV read transaction into an EventDB read transaction
 	// WithReadTransaction(ctx, tx kvdb.ReadTransaction) ReadTransaction
 
+	// Subspace returns the store current subspace
+	Subspace() kvdb.Subspace
 	// KV returns the underlying KV store instance
 	KV() kvdb.Store
 
@@ -230,6 +232,10 @@ func (s *store) ReadTransact(
 		}
 		return fn(tx)
 	})
+}
+
+func (s *store) Subspace() kvdb.Subspace {
+	return s.ss
 }
 
 func (s *store) KV() kvdb.Store {
