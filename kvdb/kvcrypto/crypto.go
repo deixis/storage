@@ -127,6 +127,14 @@ func (c *transaction) ClearRange(r kvdb.KeyRange) {
 	c.t.ClearRange(r)
 }
 
+func (c *transaction) AfterCommit(f func(ctx context.Context)) {
+	c.t.AfterCommit(f)
+}
+
+func (c *transaction) AfterRollback(f func(ctx context.Context)) {
+	c.t.AfterRollback(f)
+}
+
 type futureByteSlice struct {
 	s kvdb.FutureByteSlice
 	r *crypto.Rotor

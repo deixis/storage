@@ -2,6 +2,8 @@ package kvdb
 
 import (
 	"context"
+
+	"github.com/deixis/storage/kvdb/kvhook"
 )
 
 type Store interface {
@@ -31,6 +33,8 @@ type WriteTransaction interface {
 type Transaction interface {
 	ReadTransaction
 	WriteTransaction
+
+	kvhook.TransactionHook
 }
 
 // DirectorySubspace represents a Directory that may also be used as a Subspace

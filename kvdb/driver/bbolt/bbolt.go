@@ -13,6 +13,7 @@ import (
 	"github.com/deixis/errors"
 	"github.com/deixis/pkg/unit"
 	"github.com/deixis/storage/kvdb"
+	"github.com/deixis/storage/kvdb/kvhook"
 )
 
 const Driver = "bbolt"
@@ -52,9 +53,11 @@ func (s *Store) Transact(
 	ctx context.Context,
 	f func(kvdb.Transaction) (interface{}, error),
 ) (v interface{}, err error) {
+	reg := kvhook.NewRegistry()
+
 	err = s.BB.Update(func(tx *db.Tx) error {
 		b := tx.Bucket(s.Bucket)
-		t := &transaction{t: tx, b: b, context: ctx}
+		t := &transaction{t: tx, b: b, context: ctx, registry: reg}
 		v, err = f(t)
 		if err != nil {
 			return err
@@ -64,6 +67,13 @@ func (s *Store) Transact(
 		}
 		return nil
 	})
+
+	if err == nil {
+		reg.FireEvent(ctx, kvhook.EventAfterCommit)
+	} else {
+		reg.FireEvent(ctx, kvhook.EventAfterRollback)
+	}
+
 	return v, err
 }
 
@@ -113,10 +123,11 @@ func (o *RangeOptions) SetReverse(r bool) {
 }
 
 type transaction struct {
-	context context.Context
-	t       *db.Tx
-	b       *db.Bucket
-	errors  []error
+	context  context.Context
+	t        *db.Tx
+	b        *db.Bucket
+	errors   []error
+	registry kvhook.TransactionRegistry
 }
 
 func (t *transaction) Context() context.Context {
@@ -190,6 +201,14 @@ func (t *transaction) ClearRange(r kvdb.KeyRange) {
 		}
 		t.Clear(kv.Key)
 	}
+}
+
+func (c *transaction) AfterCommit(f func(ctx context.Context)) {
+	c.registry.AfterCommit(f)
+}
+
+func (c *transaction) AfterRollback(f func(ctx context.Context)) {
+	c.registry.AfterRollback(f)
 }
 
 type subspace struct {

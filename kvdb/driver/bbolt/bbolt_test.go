@@ -6,6 +6,7 @@ import (
 	"path"
 	"testing"
 
+	"github.com/deixis/errors"
 	"github.com/deixis/storage/kvdb"
 	"github.com/deixis/storage/kvdb/driver/bbolt"
 )
@@ -479,6 +480,57 @@ func TestSubspace(t *testing.T) {
 	}
 	if got != nil {
 		t.Errorf("expect v to be nil, but got %v", got)
+	}
+
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAfterCommitCallback(t *testing.T) {
+	store := openDB(t)
+
+	var called bool
+	afterCommit := func(ctx context.Context) {
+		t.Log(("After commit called"))
+		called = true
+	}
+
+	_, err := store.Transact(context.Background(), func(tx kvdb.Transaction) (v interface{}, err error) {
+		tx.AfterCommit(afterCommit)
+
+		tx.Set(kvdb.Key("foo"), []byte("bar"))
+		return nil, nil
+	})
+	if err != nil {
+		t.Error(err)
+	}
+	if !called {
+		t.Error("expect after commit callback to be called on commit")
+	}
+
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAfterRollbackCallback(t *testing.T) {
+	store := openDB(t)
+
+	var called bool
+	afterRollback := func(ctx context.Context) {
+		called = true
+	}
+
+	_, err := store.Transact(context.Background(), func(tx kvdb.Transaction) (v interface{}, err error) {
+		tx.AfterRollback(afterRollback)
+		return nil, errors.New("trigger a rollback")
+	})
+	if err == nil {
+		t.Error("expect go get an error on rollback")
+	}
+	if !called {
+		t.Error("expect after rollback callback to be called on rollback")
 	}
 
 	if err := store.Close(); err != nil {

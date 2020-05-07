@@ -9,6 +9,7 @@ import (
 	"github.com/apple/foundationdb/bindings/go/src/fdb/tuple"
 	"github.com/deixis/errors"
 	"github.com/deixis/storage/kvdb"
+	"github.com/deixis/storage/kvdb/kvhook"
 )
 
 const Driver = "foundationdb"
@@ -37,12 +38,22 @@ func Open(clusterFile string) (kvdb.Store, error) {
 }
 
 func (s *Store) Transact(ctx context.Context, f func(kvdb.Transaction) (interface{}, error)) (interface{}, error) {
-	return s.FDB.Transact(func(tx fdb.Transaction) (interface{}, error) {
-		t := &transaction{t: tx}
+	reg := kvhook.NewRegistry()
+
+	v, err := s.FDB.Transact(func(tx fdb.Transaction) (interface{}, error) {
+		t := &transaction{t: tx, registry: reg}
 		t.readTransaction.t = &tx
 		t.readTransaction.context = ctx
 		return f(t)
 	})
+
+	if err == nil {
+		reg.FireEvent(ctx, kvhook.EventAfterCommit)
+	} else {
+		reg.FireEvent(ctx, kvhook.EventAfterRollback)
+	}
+
+	return v, err
 }
 
 func (s *Store) ReadTransact(ctx context.Context, f func(kvdb.ReadTransaction) (interface{}, error)) (interface{}, error) {
@@ -88,7 +99,8 @@ func (o *RangeOptions) SetReverse(r bool) {
 type transaction struct {
 	readTransaction
 
-	t fdb.Transaction
+	t        fdb.Transaction
+	registry kvhook.TransactionRegistry
 }
 
 func (t *transaction) Set(key kvdb.Key, value []byte) {
@@ -105,6 +117,14 @@ func (t *transaction) ClearRange(r kvdb.KeyRange) {
 		End:   keyConvertible(r.End),
 	}
 	t.t.ClearRange(kr)
+}
+
+func (c *transaction) AfterCommit(f func(ctx context.Context)) {
+	c.registry.AfterCommit(f)
+}
+
+func (c *transaction) AfterRollback(f func(ctx context.Context)) {
+	c.registry.AfterRollback(f)
 }
 
 type readTransaction struct {
