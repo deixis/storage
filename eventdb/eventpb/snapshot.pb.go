@@ -87,7 +87,9 @@ func init() {
 	proto.RegisterType((*RecordedSnapshot)(nil), "eventpb.RecordedSnapshot")
 }
 
-func init() { proto.RegisterFile("eventdb/eventpb/snapshot.proto", fileDescriptor_7fd87282cbb32e41) }
+func init() {
+	proto.RegisterFile("eventdb/eventpb/snapshot.proto", fileDescriptor_7fd87282cbb32e41)
+}
 
 var fileDescriptor_7fd87282cbb32e41 = []byte{
 	// 172 bytes of a gzipped FileDescriptorProto

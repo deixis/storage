@@ -13,7 +13,7 @@ import (
 	"github.com/deixis/storage/eventdb/eventpb"
 	"github.com/deixis/storage/kvdb"
 	"github.com/deixis/storage/kvdb/driver/foundationdb"
-	"github.com/gogo/protobuf/proto"
+	"github.com/golang/protobuf/proto"
 )
 
 const (
@@ -52,11 +52,10 @@ type Store interface {
 	// Transact initiates a read-only transaction
 	ReadTransact(ctx context.Context, f func(ReadTransaction) (interface{}, error)) (interface{}, error)
 
-	// TODO: Allow to wrap KV transactions
 	// WithTransaction wraps a KV transaction into an EventDB transaction
-	// WithTransaction(ctx, tx kvdb.Transaction) Transaction
+	WithTransaction(tx kvdb.Transaction) Transaction
 	// WithReadTransaction wraps a KV read transaction into an EventDB read transaction
-	// WithReadTransaction(ctx, tx kvdb.ReadTransaction) ReadTransaction
+	WithReadTransaction(tx kvdb.ReadTransaction) ReadTransaction
 
 	// Subspace returns the store current subspace
 	Subspace() kvdb.Subspace
@@ -198,40 +197,25 @@ func (s *store) Transact(
 	ctx context.Context, fn func(Transaction) (interface{}, error),
 ) (interface{}, error) {
 	// Execute transaction first to make sure subscribers receive only commited changes
-	pub := &transactionPublisher{}
-	v, err := s.kv.Transact(ctx, func(kvtx kvdb.Transaction) (interface{}, error) {
-		tx, err := transact(kvtx, s.ss, pub)
-		if err != nil {
-			return nil, err
-		}
-		return fn(tx)
+	return s.kv.Transact(ctx, func(kvtx kvdb.Transaction) (interface{}, error) {
+		return fn(transact(kvtx, s.ss, s.pubSub))
 	})
-	if err != nil {
-		return nil, err
-	}
-
-	// Publish all events from the transaction
-	for i := range pub.events {
-		err := s.pubSub.Publish(ctx, pub.events[i].ch, pub.events[i].data)
-		if err != nil {
-			// TODO: Implement retry logic?
-			return nil, err
-		}
-	}
-
-	return v, nil
 }
 
 func (s *store) ReadTransact(
 	ctx context.Context, fn func(ReadTransaction) (interface{}, error),
 ) (interface{}, error) {
 	return s.kv.ReadTransact(ctx, func(kvtx kvdb.ReadTransaction) (interface{}, error) {
-		tx, err := readTransact(kvtx, s.ss)
-		if err != nil {
-			return nil, err
-		}
-		return fn(tx)
+		return fn(readTransact(kvtx, s.ss))
 	})
+}
+
+func (s *store) WithTransaction(tx kvdb.Transaction) Transaction {
+	return transact(tx, s.ss, s.pubSub)
+}
+
+func (s *store) WithReadTransaction(tx kvdb.ReadTransaction) ReadTransaction {
+	return readTransact(tx, s.ss)
 }
 
 func (s *store) Subspace() kvdb.Subspace {
@@ -262,8 +246,8 @@ func (s *store) Close() error {
 	return s.kv.Close()
 }
 
-func readTransact(tx kvdb.ReadTransaction, ss kvdb.Subspace) (ReadTransaction, error) {
-	return &readTransaction{T: tx, Ss: ss}, nil
+func readTransact(tx kvdb.ReadTransaction, ss kvdb.Subspace) ReadTransaction {
+	return &readTransaction{T: tx, Ss: ss}
 }
 
 type readTransaction struct {
@@ -299,12 +283,26 @@ func (tx *readTransaction) ReadTransaction() kvdb.ReadTransaction {
 }
 
 func transact(
-	tx kvdb.Transaction, ss kvdb.Subspace, pub *transactionPublisher,
-) (Transaction, error) {
+	tx kvdb.Transaction, ss kvdb.Subspace, pubSub pubsub.PubSub,
+) Transaction {
+	pub := &transactionPublisher{}
+
 	t := &transaction{T: tx, Ss: ss, Pub: pub}
 	t.readTransaction.T = tx
 	t.readTransaction.Ss = ss
-	return t, nil
+
+	// Publish all events from the transaction
+	tx.AfterCommit(func(ctx context.Context) {
+		for i := range pub.events {
+			err := pubSub.Publish(ctx, pub.events[i].ch, pub.events[i].data)
+			if err != nil {
+				// TODO: Implement retry logic?
+				return
+			}
+		}
+	})
+
+	return t
 }
 
 type transaction struct {

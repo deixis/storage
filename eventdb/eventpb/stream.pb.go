@@ -113,7 +113,9 @@ func init() {
 	proto.RegisterMapType((map[string]string)(nil), "eventpb.StreamMetadata.ExtendedEntry")
 }
 
-func init() { proto.RegisterFile("eventdb/eventpb/stream.proto", fileDescriptor_0da649564d2989ab) }
+func init() {
+	proto.RegisterFile("eventdb/eventpb/stream.proto", fileDescriptor_0da649564d2989ab)
+}
 
 var fileDescriptor_0da649564d2989ab = []byte{
 	// 278 bytes of a gzipped FileDescriptorProto

@@ -11,7 +11,7 @@ import (
 	"github.com/deixis/spine/net/pubsub"
 	"github.com/deixis/storage/eventdb/eventpb"
 	"github.com/deixis/storage/kvdb"
-	"github.com/gogo/protobuf/proto"
+	"github.com/golang/protobuf/proto"
 )
 
 type Subscription interface {
