@@ -80,7 +80,7 @@ type ReadTransaction interface {
 // WriteTransaction is a read-write transaction
 type WriteTransaction interface {
 	Stream(id string) Stream
-	CreateStream(id string) (Stream, error)
+	CreateStream(id string, extended ...map[string]string) (Stream, error)
 }
 
 // Transaction is a read-write transaction
@@ -317,7 +317,9 @@ func (tx *transaction) Stream(id string) Stream {
 	return buildStreamTransaction(tx.T, tx.Ss, tx.Pub, id)
 }
 
-func (tx *transaction) CreateStream(id string) (Stream, error) {
+func (tx *transaction) CreateStream(
+	id string, extended ...map[string]string,
+) (Stream, error) {
 	if id == "" {
 		return nil, errors.Bad(&errors.FieldViolation{
 			Field:       "id",
@@ -345,6 +347,11 @@ func (tx *transaction) CreateStream(id string) (Stream, error) {
 		Version:      0,
 		CreationTime: int64(utc.Now()),
 		Extended:     make(map[string]string),
+	}
+	if len(extended) > 0 && extended[0] != nil {
+		for k, v := range extended[0] {
+			meta.Extended[k] = v
+		}
 	}
 	md, err := proto.Marshal(meta)
 	if err != nil {
@@ -561,6 +568,11 @@ func (tx *streamReadTransaction) loadMetadata() (*eventpb.StreamMetadata, error)
 	if err := proto.Unmarshal(data, v); err != nil {
 		return nil, errors.Wrap(err, "error unmarshalling stream metadata")
 	}
+
+	// Ensure it is initialised
+	if v.Extended == nil {
+		v.Extended = make(map[string]string)
+	}
 	return v, nil
 }
 
@@ -773,6 +785,40 @@ func (tx *streamTransaction) PermanentlyDelete() {
 	})
 
 	tx.deleteIndices()
+}
+
+// SetExtendedMeta adds the given extended metadata do the stream metadata
+//
+// Matching keys will either be created or updated. The remaining keys will be
+// untouched.
+func (tx *streamTransaction) SetExtendedMeta(extended map[string]string) error {
+	meta, err := tx.loadMetadata()
+	if err != nil {
+		return err
+	}
+
+	for k, v := range extended {
+		meta.Extended[k] = v
+	}
+
+	tx.setMetadata(meta)
+	return nil
+}
+
+// DeleteExtendedMeta removes the given extended metadata keys from the
+// stream metadata
+func (tx *streamTransaction) DeleteExtendedMeta(keys ...string) error {
+	meta, err := tx.loadMetadata()
+	if err != nil {
+		return err
+	}
+
+	for _, key := range keys {
+		delete(meta.Extended, key)
+	}
+
+	tx.setMetadata(meta)
+	return nil
 }
 
 func (tx *streamTransaction) closeStreamWatchers() {

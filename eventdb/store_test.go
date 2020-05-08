@@ -407,3 +407,168 @@ func TestStream_SoftDeletion(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestStream_EmptyExtendedMeta ensures extended metadata are empty by default
+func TestStream_EmptyExtendedMeta(t *testing.T) {
+	t.Parallel()
+
+	// Create database client
+	bbs, err := bbolt.Open(path.Join("./db", t.Name()), 0600, "default")
+	if err != nil {
+		panic(errors.Wrap(err, "error opening DB"))
+	}
+	ctx := context.Background()
+
+	kvs := kvtrace.Trace(bbs)
+	dir, err := kvs.CreateOrOpenDir([]string{"foo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventStore, err := eventdb.New(kvs, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	streamID := "alpha"
+	_, err = eventStore.Transact(ctx, func(tx eventdb.Transaction) (v interface{}, err error) {
+		stream, err := tx.CreateStream(streamID)
+		if err != nil {
+			t.Fatal("expect to create stream, but got error", err)
+		}
+		meta, err := stream.Metadata()
+		if err != nil {
+			t.Fatal("expect to get stream metadata, but got", err)
+		}
+
+		if len(meta.Extended) > 0 {
+			t.Fatal("expect to get no extended metadata, but got", meta.Extended)
+		}
+
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestStream_CreationExtendedMeta adds extended metadata upon creation
+func TestStream_CreationExtendedMeta(t *testing.T) {
+	t.Parallel()
+
+	// Create database client
+	bbs, err := bbolt.Open(path.Join("./db", t.Name()), 0600, "default")
+	if err != nil {
+		panic(errors.Wrap(err, "error opening DB"))
+	}
+	ctx := context.Background()
+
+	kvs := kvtrace.Trace(bbs)
+	dir, err := kvs.CreateOrOpenDir([]string{"foo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventStore, err := eventdb.New(kvs, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	streamID := "alpha"
+	expectMeta := map[string]string{
+		"Idempotency-Key": "123",
+		"Version":         "atmos",
+	}
+	_, err = eventStore.Transact(ctx, func(tx eventdb.Transaction) (v interface{}, err error) {
+		stream, err := tx.CreateStream(streamID, expectMeta)
+		if err != nil {
+			t.Fatal("expect to create stream, but got error", err)
+		}
+		meta, err := stream.Metadata()
+		if err != nil {
+			t.Fatal("expect to get stream metadata, but got", err)
+		}
+
+		if len(expectMeta) != len(meta.Extended) {
+			t.Fatalf("expect to get %d metadata, but got %d", len(expectMeta), len(meta.Extended))
+		}
+
+		if err := stream.DeleteExtendedMeta("Idempotency-Key", "Version"); err != nil {
+			t.Fatal("expect to delete stream metadata, but got", err)
+		}
+
+		meta, err = stream.Metadata()
+		if err != nil {
+			t.Fatal("expect to get stream metadata, but got", err)
+		}
+
+		if len(meta.Extended) > 0 {
+			t.Fatalf("expect to metada to be deleted, but got %d", len(meta.Extended))
+		}
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestStream_SetExtendedMeta sets extended metadata after creation
+func TestStream_SetExtendedMeta(t *testing.T) {
+	t.Parallel()
+
+	// Create database client
+	bbs, err := bbolt.Open(path.Join("./db", t.Name()), 0600, "default")
+	if err != nil {
+		panic(errors.Wrap(err, "error opening DB"))
+	}
+	ctx := context.Background()
+
+	kvs := kvtrace.Trace(bbs)
+	dir, err := kvs.CreateOrOpenDir([]string{"foo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventStore, err := eventdb.New(kvs, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	streamID := "alpha"
+	expectMeta := map[string]string{
+		"Idempotency-Key": "123",
+		"Version":         "atmos",
+	}
+	_, err = eventStore.Transact(ctx, func(tx eventdb.Transaction) (v interface{}, err error) {
+		stream, err := tx.CreateStream(streamID)
+		if err != nil {
+			t.Fatal("expect to create stream, but got error", err)
+		}
+		if err := stream.SetExtendedMeta(expectMeta); err != nil {
+			t.Fatal("expect to set extended metadata, but got error", err)
+		}
+
+		meta, err := stream.Metadata()
+		if err != nil {
+			t.Fatal("expect to get stream metadata, but got", err)
+		}
+
+		if len(expectMeta) != len(meta.Extended) {
+			t.Fatalf("expect to get %d metadata, but got %d", len(expectMeta), len(meta.Extended))
+		}
+
+		if err := stream.DeleteExtendedMeta("Idempotency-Key", "Version"); err != nil {
+			t.Fatal("expect to delete stream metadata, but got", err)
+		}
+
+		meta, err = stream.Metadata()
+		if err != nil {
+			t.Fatal("expect to get stream metadata, but got", err)
+		}
+
+		if len(meta.Extended) > 0 {
+			t.Fatalf("expect to metada to be deleted, but got %d", len(meta.Extended))
+		}
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}

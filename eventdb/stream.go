@@ -67,6 +67,15 @@ type StreamWriter interface {
 	// DeleteSubscription deletes a persistent subscription
 	DeleteSubscription(group string) error
 
+	// SetExtendedMeta adds the given extended metadata do the stream metadata
+	//
+	// Matching keys will either be created or updated. The remaining keys will be
+	// untouched.
+	SetExtendedMeta(extended map[string]string) error
+	// DeleteExtendedMeta removes the given extended metadata keys from the
+	// stream metadata
+	DeleteExtendedMeta(keys ...string) error
+
 	// Delete soft deletes a stream. This means you can restore it later.
 	// If you try to Load events from a soft deleted stream you receive a not
 	// found error.
