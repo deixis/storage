@@ -359,11 +359,9 @@ func (tx *transaction) CreateStream(
 	}
 	tx.T.Set(streamMetaKey, md)
 
-	// Add stream index
-	indexStreamKey := key(tx.Ss, nsIndex, nsIndexStreamID, id)
-	tx.T.Set(indexStreamKey, nil)
-
-	return buildStreamTransaction(tx.T, tx.Ss, tx.Pub, id), nil
+	streamTx := buildStreamTransaction(tx.T, tx.Ss, tx.Pub, id)
+	streamTx.createIndices()
+	return streamTx, nil
 }
 
 func (tx *transaction) Transaction() kvdb.Transaction {
@@ -773,6 +771,24 @@ func (tx *streamTransaction) Delete() error {
 	return nil
 }
 
+func (tx *streamTransaction) Restore() error {
+	meta, err := tx.loadMetadata()
+	if err != nil {
+		return err
+	}
+	if meta.DeletionTime == 0 {
+		return nil // Stream has not been deleted
+	}
+
+	now := int64(utc.Now())
+	meta.ModificationTime = now
+	meta.DeletionTime = 0
+	tx.setMetadata(meta)
+
+	tx.createIndices()
+	return nil
+}
+
 func (tx *streamTransaction) PermanentlyDelete() {
 	// Close watchers first to make sure they don't write on the stream namespace
 	// after clear range
@@ -823,6 +839,10 @@ func (tx *streamTransaction) DeleteExtendedMeta(keys ...string) error {
 
 func (tx *streamTransaction) closeStreamWatchers() {
 	// TODO: Close all stream watchers
+}
+
+func (tx *streamTransaction) createIndices() {
+	tx.Tx.Set(key(tx.Ss, nsIndex, nsIndexStreamID, tx.ID), nil)
 }
 
 func (tx *streamTransaction) deleteIndices() {

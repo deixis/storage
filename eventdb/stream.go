@@ -80,6 +80,9 @@ type StreamWriter interface {
 	// If you try to Load events from a soft deleted stream you receive a not
 	// found error.
 	Delete() error
+	// Restore restores a soft deleted stream. Attempts to restore a non-deleted
+	// stream will have no effects.
+	Restore() error
 	// PermanentlyDelete permanently deletes a stream.
 	PermanentlyDelete()
 }

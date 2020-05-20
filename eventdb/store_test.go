@@ -408,6 +408,99 @@ func TestStream_SoftDeletion(t *testing.T) {
 	}
 }
 
+func TestStream_Restoration(t *testing.T) {
+	t.Parallel()
+
+	// Create database client
+	bbs, err := bbolt.Open(path.Join("./db", t.Name()), 0600, "default")
+	if err != nil {
+		panic(errors.Wrap(err, "error opening DB"))
+	}
+	ctx := context.Background()
+
+	kvs := kvtrace.Trace(bbs)
+	kvs.Transact(ctx, func(tx kvdb.Transaction) (v interface{}, err error) {
+		// Just a test
+		return nil, nil
+	})
+	dir, err := kvs.CreateOrOpenDir([]string{"foo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventStore, err := eventdb.New(kvs, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	streamID := "alpha"
+	_, err = eventStore.Transact(ctx, func(tx eventdb.Transaction) (v interface{}, err error) {
+		stream, err := tx.CreateStream(streamID)
+		if err != nil {
+			t.Fatal("expect to create stream, but got error", err)
+		}
+		if err := stream.Delete(); err != nil {
+			t.Fatal("expect to delete stream, but got", err)
+		}
+		meta, err := stream.Metadata()
+		if err != nil {
+			t.Fatal("expect to get stream metadata, but got", err)
+		}
+		if meta.DeletionTime == 0 {
+			t.Error("expect to get have a deleted stream")
+		}
+
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = eventStore.Transact(ctx, func(tx eventdb.Transaction) (v interface{}, err error) {
+		stream := tx.Stream(streamID)
+		if err := stream.Restore(); err != nil {
+			t.Fatal("expect to stream stream, but got", err)
+		}
+		meta, err := stream.Metadata()
+		if err != nil {
+			t.Fatal("expect to get stream metadata, but got", err)
+		}
+		if meta.DeletionTime != 0 {
+			t.Error("expect to get have a restored stream")
+		}
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Ensure stream is reindexed
+	_, err = eventStore.ReadTransact(ctx, func(tx eventdb.ReadTransaction) (v interface{}, err error) {
+		streams, err := tx.ReadStreams().GetSliceWithError()
+		if err != nil {
+			t.Fatal("unexpected streams error", err)
+		}
+		if len(streams) != 1 {
+			t.Fatal("expect to retrieve the restored stream, but got", len(streams))
+		}
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Attempt to restore a non-deleted stream
+	_, err = eventStore.Transact(ctx, func(tx eventdb.Transaction) (v interface{}, err error) {
+		stream := tx.Stream(streamID)
+		if err := stream.Restore(); err != nil {
+			t.Fatal("unexpected restore error on a non-deleted stream", err)
+		}
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestStream_EmptyExtendedMeta ensures extended metadata are empty by default
 func TestStream_EmptyExtendedMeta(t *testing.T) {
 	t.Parallel()
