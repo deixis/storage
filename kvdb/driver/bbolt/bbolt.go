@@ -287,7 +287,7 @@ func (i *rangeIterator) Advance() bool {
 	} else {
 		i.k, i.v = i.c.Next()
 	}
-	cont := len(i.k) > 0 && bytes.Compare(i.k, i.end) <= 0
+	cont := len(i.k) > 0 && bytes.Compare(i.k, i.end) < 0
 	if !cont {
 		i.k = nil
 		i.v = nil

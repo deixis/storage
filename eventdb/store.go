@@ -438,12 +438,12 @@ func (tx *streamReadTransaction) EventsInRange(start, end uint64, options ...Ran
 	if !opts.Reverse {
 		keyRange = kvdb.KeyRange{
 			Begin: key(tx.Ss, nsStream, tx.ID, nsStreamEvent, start),
-			End:   key(tx.Ss, nsStream, tx.ID, nsStreamEvent, end),
+			End:   key(tx.Ss, nsStream, tx.ID, nsStreamEvent, end+1),
 		}
 	} else {
 		keyRange = kvdb.KeyRange{
 			Begin: key(tx.Ss, nsStream, tx.ID, nsStreamEvent, end),
-			End:   key(tx.Ss, nsStream, tx.ID, nsStreamEvent, start),
+			End:   key(tx.Ss, nsStream, tx.ID, nsStreamEvent, start+1),
 		}
 	}
 
@@ -470,7 +470,7 @@ func (tx *streamReadTransaction) Snapshots(start uint64, options ...RangeOption)
 	} else {
 		keyRange = kvdb.KeyRange{
 			Begin: key(tx.Ss, nsStream, tx.ID, nsStreamSnapshot, firstKey),
-			End:   key(tx.Ss, nsStream, tx.ID, nsStreamSnapshot, start),
+			End:   key(tx.Ss, nsStream, tx.ID, nsStreamSnapshot, start+1),
 		}
 	}
 

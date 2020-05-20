@@ -175,7 +175,7 @@ func TestGetRange(t *testing.T) {
 	res, err = store.ReadTransact(context.Background(), func(tx kvdb.ReadTransaction) (v interface{}, err error) {
 		return tx.GetRange(kvdb.KeyRange{
 			Begin: kvdb.Key("alpha/123"),
-			End:   kvdb.Key("gamma/123"),
+			End:   kvdb.Key("gamma/124"),
 		}).GetSliceWithError()
 	})
 	if err != nil {
