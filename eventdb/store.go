@@ -622,7 +622,7 @@ func (tx *streamTransaction) AppendEvents(expectedVersion uint64, events ...*Rec
 		if err != nil {
 			return errors.Wrap(err, "error marshalling event")
 		}
-		tx.Tx.Set(key(tx.Ss, nsStream, tx.ID, nsStreamEvent, expectedVersion+uint64(i)+1), data)
+		tx.Tx.Set(key(tx.Ss, nsStream, tx.ID, nsStreamEvent, e.Number), data)
 
 		// Publish event
 		tx.Pub.Publish(tx.ID, data)
