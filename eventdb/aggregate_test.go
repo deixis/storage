@@ -152,11 +152,11 @@ type aggregate struct {
 	version uint64
 }
 
-func (a *aggregate) MarshalBinary() ([]byte, error) {
+func (a *aggregate) MarshalSnapshot() ([]byte, error) {
 	return nil, nil
 }
 
-func (a *aggregate) UnmarshalBinary(data []byte) error {
+func (a *aggregate) UnmarshalSnapshot(data []byte, version uint64) error {
 	return nil
 }
 
@@ -168,11 +168,11 @@ func (a *aggregate) Reduce(e eventdb.Event, version uint64) error {
 
 type eventCreated struct{}
 
-func (e *eventCreated) MarshalBinary() ([]byte, error) {
+func (e *eventCreated) MarshalEvent() ([]byte, error) {
 	return nil, nil
 }
 
-func (e *eventCreated) UnmarshalBinary(data []byte) error {
+func (e *eventCreated) UnmarshalEvent(data []byte) error {
 	if e == nil {
 		panic("unmarshal on nil pointer")
 	}
@@ -181,11 +181,11 @@ func (e *eventCreated) UnmarshalBinary(data []byte) error {
 
 type eventUpdated struct{}
 
-func (e *eventUpdated) MarshalBinary() ([]byte, error) {
+func (e *eventUpdated) MarshalEvent() ([]byte, error) {
 	return nil, nil
 }
 
-func (e *eventUpdated) UnmarshalBinary(data []byte) error {
+func (e *eventUpdated) UnmarshalEvent(data []byte) error {
 	if e == nil {
 		panic("unmarshal on nil pointer")
 	}

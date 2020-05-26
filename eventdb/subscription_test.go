@@ -741,11 +741,11 @@ func TestStore_SubscribeStreamNotFound(t *testing.T) {
 
 type dummyEvent struct{}
 
-func (e *dummyEvent) MarshalBinary() ([]byte, error) {
+func (e *dummyEvent) MarshalEvent() ([]byte, error) {
 	return nil, nil
 }
 
-func (e *dummyEvent) UnmarshalBinary(data []byte) error {
+func (e *dummyEvent) UnmarshalEvent(data []byte) error {
 	if e == nil {
 		panic("unmarshal on nil pointer")
 	}
