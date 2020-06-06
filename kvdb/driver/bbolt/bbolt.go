@@ -9,11 +9,11 @@ import (
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/apple/foundationdb/bindings/go/src/fdb/tuple"
-	db "github.com/coreos/bbolt"
 	"github.com/deixis/errors"
 	"github.com/deixis/pkg/unit"
 	"github.com/deixis/storage/kvdb"
 	"github.com/deixis/storage/kvdb/kvhook"
+	db "go.etcd.io/bbolt"
 )
 
 const Driver = "bbolt"
