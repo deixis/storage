@@ -9,8 +9,9 @@ Storage provides various storage layers built on top of a sorted/transactional K
 
 ## Key/Value Drivers
 
-  1. BBolt
-  2. FoundationDB
+  1. Badger
+  2. BBolt
+  3. FoundationDB
 
 ## Dependencies
 
