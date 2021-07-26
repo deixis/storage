@@ -5,13 +5,11 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/deixis/errors"
 	"github.com/deixis/pkg/utc"
 	"github.com/deixis/spine/net/pubsub"
 	"github.com/deixis/storage/eventdb/eventpb"
 	"github.com/deixis/storage/kvdb"
-	"github.com/deixis/storage/kvdb/driver/foundationdb"
 	"github.com/golang/protobuf/proto"
 )
 
@@ -267,13 +265,7 @@ func (tx *readTransaction) ReadStreams(opts ...kvdb.RangeOption) StreamReadersRa
 		Begin: key(tx.Ss, nsIndex, nsIndexStreamID, firstKey),
 		End:   key(tx.Ss, nsIndex, nsIndexStreamID, lastKey),
 	}
-	res := tx.T.GetRange(
-		keyRange,
-		append(
-			[]kvdb.RangeOption{foundationdb.WithRangeStreamingMode(fdb.StreamingModeIterator)},
-			opts...,
-		)...,
-	)
+	res := tx.T.GetRange(keyRange, opts...)
 	return &streamReadersRangeResult{R: res, Tx: tx.T, Ss: tx.Ss}
 }
 
@@ -422,7 +414,6 @@ func (tx *streamReadTransaction) Events(start uint64, options ...RangeOption) Ev
 	res := tx.Tx.GetRange(
 		keyRange,
 		kvdb.WithRangeLimit(opts.Limit),
-		foundationdb.WithRangeStreamingMode(fdb.StreamingModeWantAll),
 	)
 	return &eventsRangeResult{R: res}
 }
@@ -449,7 +440,6 @@ func (tx *streamReadTransaction) EventsInRange(start, end uint64, options ...Ran
 	res := tx.Tx.GetRange(
 		keyRange,
 		kvdb.WithRangeLimit(opts.Limit),
-		foundationdb.WithRangeStreamingMode(fdb.StreamingModeWantAll),
 	)
 	return &eventsRangeResult{R: res}
 }
@@ -476,7 +466,6 @@ func (tx *streamReadTransaction) Snapshots(start uint64, options ...RangeOption)
 	res := tx.Tx.GetRange(
 		keyRange,
 		kvdb.WithRangeLimit(opts.Limit),
-		foundationdb.WithRangeStreamingMode(fdb.StreamingModeWantAll),
 	)
 	return &snapshotsRangeResult{R: res}
 }
@@ -490,7 +479,6 @@ func (tx *streamReadTransaction) ClosestSnapshot(version uint64) (*RecordedSnaps
 		keyRange,
 		kvdb.WithRangeLimit(1),
 		kvdb.WithRangeReverse(true),
-		foundationdb.WithRangeStreamingMode(fdb.StreamingModeExact),
 	)
 	rr := snapshotsRangeResult{R: res}
 	snaps, err := rr.GetSliceWithError()
@@ -520,7 +508,6 @@ func (tx *streamReadTransaction) Subscriptions() SubscriptionsRangeResult {
 	}
 	res := tx.Tx.GetRange(
 		keyRange,
-		foundationdb.WithRangeStreamingMode(fdb.StreamingModeIterator),
 	)
 	return &subscriptionsRangeResult{
 		R:  res,
