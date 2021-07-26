@@ -6,7 +6,6 @@ import (
 	"sync"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
-	"github.com/apple/foundationdb/bindings/go/src/fdb/tuple"
 	"github.com/deixis/errors"
 	"github.com/deixis/pkg/utc"
 	"github.com/deixis/spine/net/pubsub"
@@ -32,8 +31,8 @@ const (
 )
 
 var (
-	firstKey tuple.TupleElement
-	lastKey  = tuple.UUID{0xFF}
+	firstKey kvdb.TupleElement
+	lastKey  = kvdb.UUID{0xFF}
 )
 
 // Store is the EventDB storage interface

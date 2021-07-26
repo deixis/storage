@@ -8,8 +8,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/apple/foundationdb/bindings/go/src/fdb"
-	"github.com/apple/foundationdb/bindings/go/src/fdb/tuple"
 	"github.com/deixis/errors"
 	"github.com/deixis/pkg/unit"
 	"github.com/deixis/storage/kvdb"
@@ -348,32 +346,30 @@ func (i *rangeIterator) Get() (kvdb.KeyValue, error) {
 // buildTuple checks each tuple element type to make sure they are supported
 // by FoundationDB and panic otherwise.
 func buildTuple(v ...kvdb.TupleElement) kvdb.Tuple {
-	var tup tuple.Tuple
+	var tup kvdb.Tuple
 	for i, elem := range v {
 		switch elem := elem.(type) {
 		case []byte:
-			tup = append(tup, tuple.TupleElement(v))
+			tup = append(tup, kvdb.TupleElement(v))
 		case string:
-			tup = append(tup, tuple.TupleElement(v))
+			tup = append(tup, kvdb.TupleElement(v))
 		case int, int8, int16, int32, int64:
-			tup = append(tup, tuple.TupleElement(v))
+			tup = append(tup, kvdb.TupleElement(v))
 		case float32, float64:
-			tup = append(tup, tuple.TupleElement(v))
+			tup = append(tup, kvdb.TupleElement(v))
 		case bool:
-			tup = append(tup, tuple.TupleElement(v))
+			tup = append(tup, kvdb.TupleElement(v))
 		case kvdb.Tuple:
 			for _, e := range elem {
-				tup = append(tup, tuple.TupleElement(e))
+				tup = append(tup, kvdb.TupleElement(e))
 			}
 		case []kvdb.TupleElement:
 			for _, e := range elem {
-				tup = append(tup, tuple.TupleElement(e))
+				tup = append(tup, kvdb.TupleElement(e))
 			}
-		case fdb.Key:
-			tup = append(tup, tuple.TupleElement(v))
-		case tuple.TupleElement:
-			tup = append(tup, v)
-		case tuple.Tuple:
+		case kvdb.Key:
+			tup = append(tup, kvdb.TupleElement(v))
+		case kvdb.TupleElement:
 			tup = append(tup, v)
 		case nil:
 			tup = append(tup, kvdb.TupleElement(v))
@@ -390,22 +386,22 @@ func packTuple(t kvdb.Tuple) []byte {
 }
 
 func unpackTuple(data []byte) (kvdb.Tuple, error) {
-	tup, err := tuple.Unpack(data)
+	tup, err := kvdb.Unpack(data)
 	if err != nil {
 		return nil, err
 	}
 	return unwrapTuple(tup), nil
 }
 
-func wrapTuple(t kvdb.Tuple) tuple.Tuple {
-	tup := make([]tuple.TupleElement, len(t))
+func wrapTuple(t kvdb.Tuple) kvdb.Tuple {
+	tup := make([]kvdb.TupleElement, len(t))
 	for i, e := range t {
-		tup[i] = tuple.TupleElement(e)
+		tup[i] = kvdb.TupleElement(e)
 	}
 	return tup
 }
 
-func unwrapTuple(t tuple.Tuple) kvdb.Tuple {
+func unwrapTuple(t kvdb.Tuple) kvdb.Tuple {
 	tup := make([]kvdb.TupleElement, len(t))
 	for i, e := range t {
 		tup[i] = kvdb.TupleElement(e)

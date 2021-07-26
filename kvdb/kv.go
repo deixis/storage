@@ -127,21 +127,3 @@ type KeyValue struct {
 // Key represents a K/V store key, a lexicographically-ordered sequence of
 // bytes.
 type Key []byte
-
-// A TupleElement is one of the types that may be encoded in tuples.
-// Although the Go compiler cannot enforce this, it is a programming
-// error to use an unsupported types as a TupleElement (and will typically
-// result in a runtime panic).
-//
-// The valid types for TupleElement are []byte (or fdb.KeyConvertible), string,
-// int64 (or int), float, double, bool, UUID, Tuple, and nil.
-type TupleElement interface{}
-
-// Tuple is a slice of objects that can be encoded as tuples. If
-// any of the TupleElements are of unsupported types, a runtime panic will occur
-// when the Tuple is packed.
-//
-// Given a Tuple T containing objects only of these types, then T will be
-// identical to the Tuple returned by unpacking the byte slice obtained by
-// packing T (modulo type normalization to []byte and int64).
-type Tuple []TupleElement
