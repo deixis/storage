@@ -14,8 +14,60 @@ const (
 )
 
 var (
+	// ErrNoConnectionFound is returned when a kvdb connection cannot be loaded
+	// from a context
+	ErrNoConnectionFound = errors.New("kvdb connection not found")
+
 	errRollback = errors.New("transaction rollback")
 )
+
+// Transact opens a transaction from the given context or create a new one
+// and inject it to the context.
+func Transact(
+	ctx context.Context,
+	fn func(ctx context.Context, tx Transaction) (interface{}, error),
+) (interface{}, error) {
+	// Retrieve existing transaction (if any)
+	if tx, ok := TxFromContext(ctx); ok {
+		return fn(ctx, tx) // Execute child transaction callback
+	}
+
+	// Otherwise create a new one
+	kv, ok := FromContext(ctx)
+	if !ok {
+		return nil, ErrNoConnectionFound
+	}
+	return kv.Transact(ctx, func(tx Transaction) (interface{}, error) {
+		ctx = TxWithContext(ctx, tx)
+		return fn(ctx, tx)
+	})
+}
+
+// ReadTransact opens a read transaction or transaction from the given
+// context or create a new one and inject it to the context.
+func ReadTransact(
+	ctx context.Context,
+	fn func(ctx context.Context, tx ReadTransaction) (interface{}, error),
+) (interface{}, error) {
+	// Retrieve existing read transaction (if any)
+	if tx, ok := RtxFromContext(ctx); ok {
+		return fn(ctx, tx) // Execute child transaction callback
+	}
+	// Or perhaps a read/write transaction
+	if tx, ok := TxFromContext(ctx); ok {
+		return fn(ctx, tx) // Execute child transaction callback
+	}
+
+	// Otherwise create a new one
+	kv, ok := FromContext(ctx)
+	if !ok {
+		return nil, ErrNoConnectionFound
+	}
+	return kv.ReadTransact(ctx, func(tx ReadTransaction) (interface{}, error) {
+		ctx = RtxWithContext(ctx, tx)
+		return fn(ctx, tx)
+	})
+}
 
 // ReadTransactionUnit opens a database transaction block in the background and
 // allows to execute ad-hoc database operations.
